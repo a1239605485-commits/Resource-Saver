@@ -2,10 +2,10 @@
   "pkgId": "celso.resourcesaver",
   "name": "精打细算 (Resource Saver)",
   "author": "liuxin",
-  "version": "1.0.2",
-  "versionCode": 202608273,
-  "description": "减少弹药、魔力、药水Buff和鱼饵的资源压力，不直接提高武器伤害。",
-  "introduce": "普通弹药20%额外节省；高级弹药10%；魔法-15%魔耗；召唤/哨兵-25%魔耗；自然回魔+20%；近战持武时药水冷却恢复+10%；战斗Buff+20%；鱼饵20%额外节省。",
+  "version": "1.0.3",
+  "versionCode": 202608274,
+  "description": "降低弹药、魔力、药水 Buff 与鱼饵的资源压力，保持原版战斗流程。",
+  "introduce": "弹药20%节省、魔力消耗降低、回魔增强、药水冷却加快、战斗Buff延长、鱼饵节省。",
   "features": [
     "QUALITY_OF_LIFE"
   ],
