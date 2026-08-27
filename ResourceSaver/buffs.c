@@ -1,19 +1,26 @@
 #include <stddef.h>
 #include <limits.h>
+#include <stdbool.h>
 
 #include "mod_logger.h"
 #include "tefkernel/patchlib/method.h"
 #include "tefkernel/patchlib/type.h"
 
 /*
- * Resource Saver - combat buff duration
+ * Resource Saver v1.0.1 - combat buff duration
  *
- * Player.AddBuff(int type, int timeToAdd, bool quiet, bool foodHack)
- * is intercepted before vanilla applies the buff. For selected long-duration
- * combat buffs we increase the incoming duration by 20%.
+ * Vanilla Terraria 1.4.5 Player.AddBuff is:
+ *   AddBuff(int type, int time, bool fromNetPvP = false)
+ * i.e. THREE parameters.
  *
- * The 30-second minimum keeps short internal/proc buffs from being stretched;
- * these IDs are primarily potion-style combat buffs at long durations.
+ * v1.0.0 incorrectly looked for a four-parameter overload and therefore never
+ * installed the hook on vanilla Android Terraria.
+ *
+ * TEFKernel prefix semantics:
+ *   false = continue original method
+ *   true  = skip original method
+ *
+ * v1.0.0 also returned true by mistake. Both problems are fixed here.
  */
 
 static patch_hook_id_t g_add_buff_hook = PATCH_HOOK_INVALID_ID;
@@ -55,38 +62,40 @@ static bool add_buff_prefix(
     (void)result;
 
     if (!args || !args[0] || !args[1]) {
-        return true; /* continue original */
+        return false; /* continue original */
     }
 
     int* buff_type = (int*)args[0];
     int* time_to_add = (int*)args[1];
 
     if (!is_supported_combat_buff(*buff_type)) {
-        return true;
+        return false;
     }
 
-    /* 30 s minimum: only extend normal long-duration potion applications. */
+    /* Only extend long potion-style applications (>= 30 seconds). */
     if (*time_to_add < 1800) {
-        return true;
+        return false;
     }
 
-    if (*time_to_add <= INT_MAX / 6 * 5) {
+    if (*time_to_add <= INT_MAX - (*time_to_add / 5)) {
         *time_to_add += *time_to_add / 5; /* +20% */
     }
 
-    return true; /* normal execution */
+    return false; /* IMPORTANT: false = run vanilla AddBuff */
 }
 
 void resource_saver_buffs_init(void) {
     patch_handle_t player_type = patchlib_type_get_type("Terraria", "Player");
+
     if (!player_type) {
         mod_logger_write(MOD_LOG_LEVEL_ERROR, "ResourceSaver",
                          "Buff init failed: Terraria.Player not found");
         return;
     }
 
+    /* Vanilla Android Terraria: AddBuff(type, time, fromNetPvP) => 3 params. */
     patch_handle_t add_buff = patchlib_type_get_method_by_param_count(
-        player_type, "AddBuff", 4);
+        player_type, "AddBuff", 3);
 
     if (add_buff) {
         g_add_buff_hook = patchlib_install_prepost_hook(
@@ -94,9 +103,10 @@ void resource_saver_buffs_init(void) {
     }
 
     mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-                     "Combat buff duration hook: %s (id=%d)",
+                     "Combat buff duration hook v1.0.1: %s (id=%d, method=%p)",
                      g_add_buff_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
-                     (int)g_add_buff_hook);
+                     (int)g_add_buff_hook,
+                     add_buff);
 
     if (add_buff) patchlib_free(add_buff);
     patchlib_free(player_type);
