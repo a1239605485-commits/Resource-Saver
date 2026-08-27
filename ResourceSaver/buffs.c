@@ -5,7 +5,7 @@
 #include "mod_logger.h"
 #include "tefkernel/patchlib/method.h"
 
-/* Resource Saver v1.1.0 - combat potion buff duration +20%. */
+/* Resource Saver v1.1.1 - combat potion buff duration +20%. */
 
 static patch_hook_id_t g_add_buff_hook = PATCH_HOOK_INVALID_ID;
 static uint64_t g_extended_buff_count = 0;
@@ -69,7 +69,7 @@ void resource_saver_buffs_init(void) {
         mod_logger_write(
             MOD_LOG_LEVEL_ERROR,
             "ResourceSaver",
-            "Buff v1.1.0 init failed: Terraria.Player not found"
+            "Buff v1.1.1 init failed: Terraria.Player not found"
         );
         return;
     }
@@ -85,7 +85,7 @@ void resource_saver_buffs_init(void) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Combat buff v1.1.0 hook: %s (id=%d AddBuff=%p)",
+        "Combat buff v1.1.1 hook: %s (id=%d AddBuff=%p)",
         g_add_buff_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
         (int)g_add_buff_hook,
         add_buff

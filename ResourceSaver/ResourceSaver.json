@@ -2,9 +2,9 @@
   "pkgId": "celso.resourcesaver",
   "name": "精打细算 (Resource Saver)",
   "author": "liuxin",
-  "version": "1.1.0",
-  "versionCode": 202608275,
-  "description": "基于v1.0.3稳定核心的精确资源节省版。",
+  "version": "1.1.1",
+  "versionCode": 202608276,
+  "description": "v1.1.1：修复1.4.5安卓端魔力消耗降低不生效的问题。",
   "introduce": "普通弹药20%、特殊弹药10%、魔法魔耗-15%、召唤/哨兵-25%、回魔+20%、近战药水冷却+10%、战斗Buff+20%、鱼饵额外20%节省。",
   "features": [
     "QUALITY_OF_LIFE"

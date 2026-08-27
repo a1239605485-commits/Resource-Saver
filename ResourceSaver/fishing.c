@@ -8,10 +8,10 @@
 #include "tefkernel/patchlib/struct/array.h"
 
 /*
- * Resource Saver v1.1.0 - fixed extra 20% bait saving
+ * Resource Saver v1.1.1 - fixed extra 20% bait saving
  *
  * The stable v1.0.3 used accTackleBox, which definitely worked but did not
- * equal a fixed +20% independent save chance. v1.1.0 instead hooks the
+ * equal a fixed +20% independent save chance. v1.1.1 instead hooks the
  * already-proven Player.Update(int), snapshots bait stacks before the update,
  * and if exactly one bait was consumed during the update, restores it with an
  * independent 20% roll.
@@ -269,7 +269,7 @@ void resource_saver_fishing_init(void) {
         mod_logger_write(
             MOD_LOG_LEVEL_ERROR,
             "ResourceSaver",
-            "Fishing v1.1.0 init failed: Player=%p Item=%p",
+            "Fishing v1.1.1 init failed: Player=%p Item=%p",
             player_type,
             item_type
         );
@@ -297,7 +297,7 @@ void resource_saver_fishing_init(void) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Bait saver v1.1.0 fixed-20 hook: %s (id=%d Update=%p inventory=%p bait=%p SetDefaults1=%p SetDefaults2=%p)",
+        "Bait saver v1.1.1 fixed-20 hook: %s (id=%d Update=%p inventory=%p bait=%p SetDefaults1=%p SetDefaults2=%p)",
         g_update_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
         (int)g_update_hook,
         update,
