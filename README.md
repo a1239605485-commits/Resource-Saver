@@ -1,7 +1,8 @@
-# Resource Saver v1.2.5 - 安全 UI 精确探测版
+# Resource Saver v1.2.6
 
-- 功能核心保持 v1.1.0。
-- 不安装任何 UI 绘制 Hook，不会重复 v1.2.3 的 SpriteBatch 崩溃。
-- 启动时使用 `patchlib_type_get_method()` 精确查询常见 Terraria UI/绘制方法。
-- TEFKernel 自己会把成功查询写入 runtime 日志，例如 `Found method 'DrawInterface' at ...`。
-- 同时把查询结果写到 MOD 私有目录的 `ui_probe.txt`。
+基于已验证的 v1.1.0 功能核心。
+
+本版 UI 根据 Android Terraria 1.4.5.6.4 真机日志确认的 `Terraria.Main.DrawInterface_27_Inventory` 实现。
+不主动调用 SpriteBatch.Begin/End；仅当 `_beginCalled == true` 时绘制中文设置按钮和面板。
+
+打开背包后显示“资源节省设置”。

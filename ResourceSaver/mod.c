@@ -24,7 +24,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.5 initializing (v1.1.0 core, safe exact UI probe, author: liuxin)"
+        "Resource Saver v1.2.6 initializing (v1.1.0 core, Android verified Chinese settings UI, author: liuxin)"
     );
 
     resource_saver_config_init(handle ? handle->private_dir : NULL);
@@ -40,7 +40,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.5 initialized"
+        "Resource Saver v1.2.6 initialized"
     );
 }
 
@@ -56,15 +56,15 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.5 unloaded"
+        "Resource Saver v1.2.6 unloaded"
     );
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "celso.resourcesaver",
-    .version_code = 202608282,
+    .version_code = 202608283,
     .api_version = 1,
-    .version = "1.2.5"
+    .version = "1.2.6"
 };
 
 static kernel_mod_info_t* get_info(void) {
