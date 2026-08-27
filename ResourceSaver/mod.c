@@ -17,14 +17,14 @@ void resource_saver_buffs_init(void);
 void resource_saver_buffs_cleanup(void);
 void resource_saver_fishing_init(void);
 void resource_saver_fishing_cleanup(void);
-void resource_saver_settings_ui_init(void);
+void resource_saver_settings_ui_init(const char* private_dir);
 void resource_saver_settings_ui_cleanup(void);
 
 static void init_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.4 initializing (v1.1.0 core, safe UI diagnostic, author: liuxin)"
+        "Resource Saver v1.2.5 initializing (v1.1.0 core, safe exact UI probe, author: liuxin)"
     );
 
     resource_saver_config_init(handle ? handle->private_dir : NULL);
@@ -35,12 +35,12 @@ static void init_mod(kernel_mod_handle_t* handle) {
     resource_saver_fishing_init();
 
     /* Android 中文独立设置按钮：挂在背包绘制界面。 */
-    resource_saver_settings_ui_init();
+    resource_saver_settings_ui_init(handle ? handle->private_dir : NULL);
 
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.4 initialized"
+        "Resource Saver v1.2.5 initialized"
     );
 }
 
@@ -56,15 +56,15 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.4 unloaded"
+        "Resource Saver v1.2.5 unloaded"
     );
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "celso.resourcesaver",
-    .version_code = 202608281,
+    .version_code = 202608282,
     .api_version = 1,
-    .version = "1.2.4"
+    .version = "1.2.5"
 };
 
 static kernel_mod_info_t* get_info(void) {
