@@ -2,8 +2,8 @@
   "pkgId": "celso.resourcesaver",
   "name": "精打细算 (Resource Saver)",
   "author": "liuxin",
-  "version": "1.2.1",
-  "versionCode": 202608278,
+  "version": "1.2.3",
+  "versionCode": 202608280,
   "description": "v1.1.0稳定功能核心 + 中文游戏内独立开关。",
   "introduce": "打开背包显示“资源节省设置”，总开关及8项功能可独立切换；设置自动保存。核心数值逻辑保持v1.1.0。",
   "features": [

@@ -24,7 +24,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.1 initializing (v1.1.0 core, Chinese settings, author: liuxin)"
+        "Resource Saver v1.2.3 initializing (v1.1.0 core, Chinese SpriteBatch.End settings, author: liuxin)"
     );
 
     resource_saver_config_init(handle ? handle->private_dir : NULL);
@@ -40,7 +40,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.1 initialized"
+        "Resource Saver v1.2.3 initialized"
     );
 }
 
@@ -56,15 +56,15 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Resource Saver v1.2.1 unloaded"
+        "Resource Saver v1.2.3 unloaded"
     );
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "celso.resourcesaver",
-    .version_code = 202608278,
+    .version_code = 202608280,
     .api_version = 1,
-    .version = "1.2.1"
+    .version = "1.2.3"
 };
 
 static kernel_mod_info_t* get_info(void) {

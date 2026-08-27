@@ -10,22 +10,21 @@
 #include "tefkernel/patchlib/struct/string.h"
 
 /*
- * Resource Saver v1.2.2 - 中文游戏内设置面板
+ * Resource Saver v1.2.3 - 中文游戏内设置面板
  *
- * v1.2.1 日志已经证明：
- * - Terraria.Main / Terraria.Utils 可以找到；
- * - 但 Android 1.4.5.6.4 并没有匹配到我们猜测的
- *   DrawInventory / DrawInterface_27_Inventory / DrawInterface 绘制目标。
+ * 关键修复：
+ * MonoGame 的 SpriteBatch.Begin 在 C# 中可以写成 Begin()，但 IL/IL2CPP 元数据
+ * 实际是一个 7 参数方法（参数只是 optional），所以按 0 参数寻找 Begin 会失败。
+ * v1.2.2 因此没有安装 UI Hook。
  *
- * v1.2.2 改为只 Hook 已经稳定存在的 Main.Draw(GameTime)。
- * Main.Draw 返回后，原版 SpriteBatch 已结束，因此本 MOD 自己执行：
- *     SpriteBatch.Begin()
- *     Utils.DrawBorderString(...)
- *     SpriteBatch.End()
- * 这样不依赖 Terraria 内部背包绘制函数的名字。
+ * v1.2.3 不再自己 Begin/End，也不再依赖 Main.Draw。
+ * 改为 Hook SpriteBatch.End() 的 Prefix：此时 SpriteBatch 已经处于活动绘制批次中，
+ * 我们直接调用 Terraria.Utils.DrawBorderString 把中文按钮/面板加入当前批次，
+ * 然后返回 false，让原版 End() 正常继续执行。
  *
- * 默认仅在背包打开时显示入口；如果 playerInventory 字段在某个构建中
- * 不可读取，则自动退化为始终显示入口，确保不会再“完全没有按钮”。
+ * 优先只在 Main.spriteBatch 上绘制。如果该字段在某个 Android 构建不可访问，
+ * 自动退化为在可用 SpriteBatch.End 前尝试绘制，以保证不会因单个字段缺失而
+ * 整个 UI Hook 都无法安装。
  */
 
 typedef struct rs_vector2_t {
@@ -46,15 +45,16 @@ static patch_handle_t g_main_player_inventory = PATCH_NULL;
 static patch_handle_t g_main_sprite_batch = PATCH_NULL;
 
 static patch_handle_t g_utils_draw_border_string = PATCH_NULL;
-static patch_handle_t g_sprite_batch_begin = PATCH_NULL;
 static patch_handle_t g_sprite_batch_end = PATCH_NULL;
 
-static patch_hook_id_t g_draw_hook = PATCH_HOOK_INVALID_ID;
+static patch_hook_id_t g_end_hook = PATCH_HOOK_INVALID_ID;
 
 static bool g_panel_open = false;
 static bool g_prev_mouse_left = false;
 static int g_draw_failure_logged = 0;
-static unsigned long long g_draw_frames = 0;
+static int g_missing_mouse_logged = 0;
+static unsigned long long g_end_calls = 0;
+static unsigned long long g_draw_calls = 0;
 
 static patch_handle_t g_button_open = PATCH_NULL;
 static patch_handle_t g_button_close = PATCH_NULL;
@@ -102,10 +102,10 @@ static void free_handle(patch_handle_t* h) {
 }
 
 static void init_labels(void) {
-    g_button_open = create_text("【资源节省设置】  点击打开");
-    g_button_close = create_text("【资源节省设置】  点击收起");
+    g_button_open = create_text("【资源节省设置】 点击打开");
+    g_button_close = create_text("【资源节省设置】 点击收起");
     g_title = create_text("—— 精打细算：资源节省设置 ——");
-    g_tip = create_text("点击项目即可独立开启/关闭，修改后自动保存");
+    g_tip = create_text("点击项目独立开启/关闭，设置自动保存");
     g_restore_defaults = create_text("【恢复默认设置】");
     g_close_panel = create_text("【关闭设置面板】");
 
@@ -155,65 +155,40 @@ static int draw_text(
 }
 
 static int should_show_entry(void) {
-    /* 首选：只在打开背包时显示。 */
     if (g_main_player_inventory) {
         bool open = false;
         patchlib_field_get_value(g_main_player_inventory, NULL, &open);
         return open ? 1 : 0;
     }
 
-    /*
-     * 兼容回退：某些手机版若 playerInventory 字段不可访问，
-     * 入口始终显示。相比完全看不到按钮，这个回退更安全。
-     */
+    /* 找不到 playerInventory 时常驻显示，避免 UI 再次完全不可见。 */
     return 1;
 }
 
-static int begin_overlay_batch(patch_handle_t sprite_batch) {
-    if (!g_sprite_batch_begin || !sprite_batch) return 0;
-    return patchlib_method_invoke_args(
-        g_sprite_batch_begin,
-        sprite_batch,
-        NULL,
-        NULL
-    ) ? 1 : 0;
+static int is_main_sprite_batch(patch_handle_t instance) {
+    if (!instance) return 0;
+
+    if (g_main_sprite_batch) {
+        patch_handle_t main_batch = PATCH_NULL;
+        patchlib_field_get_value(g_main_sprite_batch, NULL, &main_batch);
+
+        if (main_batch) {
+            return main_batch == instance ? 1 : 0;
+        }
+    }
+
+    /* 无法取得 Main.spriteBatch 时不阻断 UI，允许回退绘制。 */
+    return 1;
 }
 
-static void end_overlay_batch(patch_handle_t sprite_batch) {
-    if (!g_sprite_batch_end || !sprite_batch) return;
-    patchlib_method_invoke_args(
-        g_sprite_batch_end,
-        sprite_batch,
-        NULL,
-        NULL
-    );
-}
-
-static void draw_settings_overlay(void) {
-    ++g_draw_frames;
-
+static void draw_settings_overlay(patch_handle_t sprite_batch) {
+    if (!sprite_batch) return;
     if (!should_show_entry()) {
         g_prev_mouse_left = false;
         return;
     }
 
-    patch_handle_t sprite_batch = PATCH_NULL;
-    if (g_main_sprite_batch) {
-        patchlib_field_get_value(g_main_sprite_batch, NULL, &sprite_batch);
-    }
-    if (!sprite_batch) return;
-
-    if (!begin_overlay_batch(sprite_batch)) {
-        if (!g_draw_failure_logged) {
-            g_draw_failure_logged = 1;
-            mod_logger_write(
-                MOD_LOG_LEVEL_WARNING,
-                "ResourceSaver",
-                "Chinese UI v1.2.2: SpriteBatch.Begin() invocation failed"
-            );
-        }
-        return;
-    }
+    ++g_draw_calls;
 
     int mouse_x = 0;
     int mouse_y = 0;
@@ -227,20 +202,29 @@ static void draw_settings_overlay(void) {
     if (g_main_screen_width) patchlib_field_get_value(g_main_screen_width, NULL, &screen_width);
     if (g_main_screen_height) patchlib_field_get_value(g_main_screen_height, NULL, &screen_height);
 
+    if (!g_main_mouse_left && !g_missing_mouse_logged) {
+        g_missing_mouse_logged = 1;
+        mod_logger_write(
+            MOD_LOG_LEVEL_WARNING,
+            "ResourceSaver",
+            "Chinese UI v1.2.3: Main.mouseLeft not found; panel can draw but touch toggle may be unavailable"
+        );
+    }
+
     if (screen_width < 480) screen_width = 480;
     if (screen_height < 320) screen_height = 320;
 
     bool click = mouse_left && !g_prev_mouse_left;
 
     /*
-     * 使用实际屏幕像素绘制，避免依赖 Terraria UI 缩放矩阵。
-     * 按钮固定在右上方，尺寸刻意做大，方便 Android 触控。
+     * 手机横屏优先：固定右上方。面板宽度不会超过屏幕减去两侧边距。
      */
-    const int width = 440;
-    const int row_h = 38;
+    int width = 440;
+    if (width > screen_width - 40) width = screen_width - 40;
+    const int row_h = 36;
     int x = screen_width - width - 24;
     if (x < 20) x = 20;
-    int top = 105;
+    int top = 90;
     if (top + row_h > screen_height) top = 20;
 
     rs_color_t white = make_color(245, 245, 245, 255);
@@ -259,7 +243,7 @@ static void draw_settings_overlay(void) {
         (float)x,
         (float)top,
         button_hover ? yellow : cyan,
-        0.92f
+        0.90f
     );
 
     if (!draw_ok && !g_draw_failure_logged) {
@@ -267,7 +251,7 @@ static void draw_settings_overlay(void) {
         mod_logger_write(
             MOD_LOG_LEVEL_WARNING,
             "ResourceSaver",
-            "Chinese UI v1.2.2: DrawBorderString invocation failed"
+            "Chinese UI v1.2.3: DrawBorderString invocation failed inside SpriteBatch.End prefix"
         );
     }
 
@@ -277,12 +261,12 @@ static void draw_settings_overlay(void) {
     }
 
     if (g_panel_open) {
-        int y = top + row_h + 12;
+        int y = top + row_h + 8;
 
-        draw_text(sprite_batch, g_title, (float)x, (float)y, yellow, 0.82f);
+        draw_text(sprite_batch, g_title, (float)x, (float)y, yellow, 0.80f);
         y += row_h;
-        draw_text(sprite_batch, g_tip, (float)x, (float)y, gray, 0.68f);
-        y += row_h + 4;
+        draw_text(sprite_batch, g_tip, (float)x, (float)y, gray, 0.66f);
+        y += row_h + 2;
 
         for (int i = 0; i < RS_FEATURE_COUNT; ++i) {
             bool raw_enabled = resource_saver_feature_raw_enabled((rs_feature_t)i);
@@ -299,7 +283,7 @@ static void draw_settings_overlay(void) {
                 (float)x,
                 (float)y,
                 color,
-                0.76f
+                0.72f
             );
 
             if (click && hover) {
@@ -310,7 +294,7 @@ static void draw_settings_overlay(void) {
             y += row_h;
         }
 
-        y += 8;
+        y += 4;
         int defaults_hover = point_in_rect(mouse_x, mouse_y, x, y, width, row_h);
         draw_text(
             sprite_batch,
@@ -318,7 +302,7 @@ static void draw_settings_overlay(void) {
             (float)x,
             (float)y,
             defaults_hover ? yellow : white,
-            0.78f
+            0.74f
         );
         if (click && defaults_hover) {
             resource_saver_config_restore_defaults();
@@ -333,7 +317,7 @@ static void draw_settings_overlay(void) {
             (float)x,
             (float)y,
             close_hover ? yellow : white,
-            0.78f
+            0.74f
         );
         if (click && close_hover) {
             g_panel_open = false;
@@ -341,22 +325,32 @@ static void draw_settings_overlay(void) {
         }
     }
 
-    end_overlay_batch(sprite_batch);
     g_prev_mouse_left = mouse_left;
 }
 
-static void main_draw_postfix(
+/*
+ * SpriteBatch.End 的 Prefix。
+ * 此时 Begin 已经由 Terraria 原版调用，SpriteBatch 仍处于活动状态。
+ * 这里绘制后返回 false，保持项目中已验证的 TEFKernel Prefix 语义：
+ * false = 继续执行原版方法。
+ */
+static bool sprite_batch_end_prefix(
     patch_handle_t instance,
     void** args,
-    void* result,
-    const patch_method_signature_t* sig
+    const patch_method_signature_t* sig,
+    void* result
 ) {
-    (void)instance;
     (void)args;
-    (void)result;
     (void)sig;
+    (void)result;
 
-    draw_settings_overlay();
+    ++g_end_calls;
+
+    if (!instance) return false;
+    if (!is_main_sprite_batch(instance)) return false;
+
+    draw_settings_overlay(instance);
+    return false;
 }
 
 void resource_saver_settings_ui_init(void) {
@@ -366,13 +360,12 @@ void resource_saver_settings_ui_init(void) {
         "Microsoft.Xna.Framework.Graphics",
         "SpriteBatch"
     );
-    patch_handle_t draw_target = PATCH_NULL;
 
     if (!main_type || !utils_type || !sprite_batch_type) {
         mod_logger_write(
             MOD_LOG_LEVEL_ERROR,
             "ResourceSaver",
-            "Chinese UI v1.2.2 init failed: Main=%p Utils=%p SpriteBatch=%p",
+            "Chinese UI v1.2.3 init failed: Main=%p Utils=%p SpriteBatch=%p",
             main_type,
             utils_type,
             sprite_batch_type
@@ -394,65 +387,41 @@ void resource_saver_settings_ui_init(void) {
         8
     );
 
-    g_sprite_batch_begin = patchlib_type_get_method_by_param_count(
-        sprite_batch_type,
-        "Begin",
-        0
-    );
-
+    /* End() 在 MonoGame 元数据中是真正的 0 参数实例方法。 */
     g_sprite_batch_end = patchlib_type_get_method_by_param_count(
         sprite_batch_type,
         "End",
         0
     );
 
-    /*
-     * 关键修复：不再依赖任何背包/界面子绘制方法。
-     * Main.Draw(GameTime) 在 Android / PC 1.4.5 都是核心绘制入口。
-     */
-    draw_target = patchlib_type_get_method_by_param_count(
-        main_type,
-        "Draw",
-        1
-    );
-
     init_labels();
 
     /*
-     * 安装 Hook 的必要条件只保留真正与绘制有关的对象。
-     * mouseX/mouseY/playerInventory 缺失时仍然允许安装，避免按钮再次彻底消失。
+     * v1.2.3 的安装条件只需要：End + DrawBorderString。
+     * Main.spriteBatch / 鼠标 / playerInventory 缺失都不会再阻止 Hook 安装。
      */
-    if (draw_target &&
-        g_main_sprite_batch &&
-        g_utils_draw_border_string &&
-        g_sprite_batch_begin &&
-        g_sprite_batch_end) {
-
-        g_draw_hook = patchlib_install_prepost_hook(
-            draw_target,
-            NULL,
-            main_draw_postfix
+    if (g_sprite_batch_end && g_utils_draw_border_string) {
+        g_end_hook = patchlib_install_prepost_hook(
+            g_sprite_batch_end,
+            sprite_batch_end_prefix,
+            NULL
         );
     }
 
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Chinese settings UI v1.2.2: %s hook=%d Draw=%p spriteBatch=%p DrawBorderString=%p Begin=%p End=%p mouse=(%p,%p,%p) inventory=%p",
-        g_draw_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
-        (int)g_draw_hook,
-        draw_target,
-        g_main_sprite_batch,
-        g_utils_draw_border_string,
-        g_sprite_batch_begin,
+        "Chinese settings UI v1.2.3: %s hook=%d End=%p DrawBorderString=%p spriteBatchField=%p mouse=(%p,%p,%p) inventory=%p",
+        g_end_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
+        (int)g_end_hook,
         g_sprite_batch_end,
+        g_utils_draw_border_string,
+        g_main_sprite_batch,
         g_main_mouse_x,
         g_main_mouse_y,
         g_main_mouse_left,
         g_main_player_inventory
     );
-
-    if (draw_target) patchlib_free(draw_target);
 
 done:
     if (main_type) patchlib_free(main_type);
@@ -461,9 +430,9 @@ done:
 }
 
 void resource_saver_settings_ui_cleanup(void) {
-    if (g_draw_hook != PATCH_HOOK_INVALID_ID) {
-        patchlib_uninstall_hook(g_draw_hook);
-        g_draw_hook = PATCH_HOOK_INVALID_ID;
+    if (g_end_hook != PATCH_HOOK_INVALID_ID) {
+        patchlib_uninstall_hook(g_end_hook);
+        g_end_hook = PATCH_HOOK_INVALID_ID;
     }
 
     free_handle(&g_main_mouse_x);
@@ -474,7 +443,6 @@ void resource_saver_settings_ui_cleanup(void) {
     free_handle(&g_main_player_inventory);
     free_handle(&g_main_sprite_batch);
     free_handle(&g_utils_draw_border_string);
-    free_handle(&g_sprite_batch_begin);
     free_handle(&g_sprite_batch_end);
 
     free_handle(&g_button_open);
@@ -492,5 +460,7 @@ void resource_saver_settings_ui_cleanup(void) {
     g_panel_open = false;
     g_prev_mouse_left = false;
     g_draw_failure_logged = 0;
-    g_draw_frames = 0;
+    g_missing_mouse_logged = 0;
+    g_end_calls = 0;
+    g_draw_calls = 0;
 }
