@@ -2,7 +2,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
 #include "mod_logger.h"
 
@@ -55,7 +54,7 @@ void resource_saver_config_save(void) {
     }
 
     fprintf(fp,
-            "# Resource Saver v1.2.0\n"
+            "# Resource Saver v1.2.1\n"
             "# 1 = enabled, 0 = disabled\n"
             "master=%d\n"
             "regular_ammo=%d\n"
@@ -146,7 +145,7 @@ const resource_saver_config_t* resource_saver_config_get(void) {
     return &g_config;
 }
 
-static bool raw_feature_value(rs_feature_t feature) {
+bool resource_saver_feature_raw_enabled(rs_feature_t feature) {
     switch (feature) {
         case RS_FEATURE_MASTER: return g_config.master_enabled;
         case RS_FEATURE_REGULAR_AMMO: return g_config.regular_ammo;
@@ -163,7 +162,7 @@ static bool raw_feature_value(rs_feature_t feature) {
 
 bool resource_saver_feature_enabled(rs_feature_t feature) {
     if (feature == RS_FEATURE_MASTER) return g_config.master_enabled;
-    return g_config.master_enabled && raw_feature_value(feature);
+    return g_config.master_enabled && resource_saver_feature_raw_enabled(feature);
 }
 
 void resource_saver_config_toggle(rs_feature_t feature) {
@@ -182,8 +181,10 @@ void resource_saver_config_toggle(rs_feature_t feature) {
 
     resource_saver_config_save();
     mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-                     "Setting changed: feature=%d enabled=%d",
-                     (int)feature, raw_feature_value(feature) ? 1 : 0);
+                     "Setting changed: feature=%d rawEnabled=%d master=%d",
+                     (int)feature,
+                     resource_saver_feature_raw_enabled(feature) ? 1 : 0,
+                     g_config.master_enabled ? 1 : 0);
 }
 
 void resource_saver_config_restore_defaults(void) {

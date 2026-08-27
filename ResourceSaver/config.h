@@ -32,6 +32,7 @@ void resource_saver_config_init(const char* private_dir);
 void resource_saver_config_cleanup(void);
 const resource_saver_config_t* resource_saver_config_get(void);
 bool resource_saver_feature_enabled(rs_feature_t feature);
+bool resource_saver_feature_raw_enabled(rs_feature_t feature);
 void resource_saver_config_toggle(rs_feature_t feature);
 void resource_saver_config_restore_defaults(void);
 void resource_saver_config_save(void);

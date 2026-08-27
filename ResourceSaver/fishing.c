@@ -9,7 +9,7 @@
 #include "tefkernel/patchlib/struct/array.h"
 
 /*
- * Resource Saver v1.2.0 - fixed extra 20% bait saving
+ * Resource Saver v1.2.1 - v1.1.0 fixed extra 20% bait saving + switch
  *
  * The stable v1.0.3 used accTackleBox, which definitely worked but did not
  * equal a fixed +20% independent save chance. v1.1.0 instead hooks the
@@ -110,13 +110,17 @@ static bool update_prefix(
     (void)sig;
     (void)result;
 
-    if (!resource_saver_feature_enabled(RS_FEATURE_BAIT)) {
-        return false;
-    }
-
     if (!instance || !g_player_inventory || !g_item_type ||
         !g_item_stack || !g_item_bait) {
         return false; /* continue vanilla Player.Update */
+    }
+
+    if (!resource_saver_feature_enabled(RS_FEATURE_BAIT)) {
+        for (size_t k = 0; k < 16; ++k) {
+            if (g_snapshots[k].active && g_snapshots[k].player == instance)
+                clear_snapshot(&g_snapshots[k]);
+        }
+        return false;
     }
 
     bait_player_snapshot_t* s = snapshot_for_player(instance);
@@ -199,10 +203,8 @@ static void update_postfix(
 
     if (!resource_saver_feature_enabled(RS_FEATURE_BAIT)) {
         for (size_t k = 0; k < 16; ++k) {
-            if (g_snapshots[k].active && g_snapshots[k].player == instance) {
+            if (g_snapshots[k].active && g_snapshots[k].player == instance)
                 clear_snapshot(&g_snapshots[k]);
-                break;
-            }
         }
         return;
     }
@@ -284,7 +286,7 @@ void resource_saver_fishing_init(void) {
         mod_logger_write(
             MOD_LOG_LEVEL_ERROR,
             "ResourceSaver",
-            "Fishing v1.2.0 init failed: Player=%p Item=%p",
+            "Fishing v1.2.1 init failed: Player=%p Item=%p",
             player_type,
             item_type
         );
@@ -312,7 +314,7 @@ void resource_saver_fishing_init(void) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Bait saver v1.2.0 fixed-20 hook: %s (id=%d Update=%p inventory=%p bait=%p SetDefaults1=%p SetDefaults2=%p)",
+        "Bait saver v1.2.1 (v1.1.0 core) fixed-20 hook: %s (id=%d Update=%p inventory=%p bait=%p SetDefaults1=%p SetDefaults2=%p)",
         g_update_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
         (int)g_update_hook,
         update,

@@ -1,68 +1,48 @@
-# Resource Saver / 精打细算 v1.2.0
+# 精打细算 / Resource Saver v1.2.1
 
-Author: **liuxin**  
-Package: `celso.resourcesaver`  
-Target: Terraria Android 1.4.5.6.4 + TEFKernel / KernelLoader
+作者：liuxin
 
-## v1.2.0: Custom switches
+## 本版原则
 
-This version adds a persistent settings system and an in-game settings overlay.
-Open Terraria's in-game **Settings / Options** screen. A `Resource Saver [ OPEN ]`
-entry is drawn on the left side. Tap it to open the Resource Saver panel.
+- 所有实际功能逻辑以已经验证有效的 **v1.1.0 precise** 为基线。
+- 魔力消耗仍使用 v1.1.0 的 `Player.manaCost` 方案，没有换成 v1.1.1 的 Item.mana 临时修改方案。
+- 只新增配置层和中文游戏内设置 UI。
+- 不再使用 `Terraria.IngameOptions`。Android 1.4.5.6.4 日志已确认该类型无法由 TEFKernel 找到。
 
-Available switches (all ON by default):
+## 游戏内设置入口
 
-1. Master switch
-2. Regular ammo +20%
-3. Special ammo +10%
-4. Magic mana -15%
-5. Summon/Sentry mana -25%
-6. Mana regen +20%
-7. Melee potion recovery +10%
-8. Combat buff duration +20%
-9. Bait saver +20%
+进入世界后打开背包，在背包界面右上区域显示：
 
-The panel also includes **Restore defaults**.
+`资源节省设置【打开】`
 
-## Persistent config
+点击后可独立设置：
 
-Settings are written immediately to the mod private directory as:
+1. 总开关
+2. 普通弹药节省 20%
+3. 特殊弹药节省 10%
+4. 魔法魔力消耗 -15%
+5. 召唤/哨兵魔耗 -25%
+6. 自然回魔速度 +20%
+7. 近战药水冷却 +10%
+8. 战斗增益时长 +20%
+9. 鱼饵节省 20%
 
-`config.ini`
+所有游戏内文字均为中文。
 
-Example:
+## 配置保存
 
-```ini
-master=1
-regular_ammo=1
-special_ammo=1
-magic_mana=1
-summon_mana=1
-mana_regen=1
-melee_potion=1
-combat_buff=1
-bait=1
-```
+设置会立即保存到 MOD 的 private_dir/config.ini，下次启动自动读取。
 
-`1` means enabled and `0` means disabled. This file is also a fallback way to
-change settings if the UI hook is unavailable on a future Terraria build.
+## UI Hook 兼容顺序
 
-## Build
+1. `Terraria.Main.DrawInventory()`
+2. `Terraria.Main.DrawInterface_27_Inventory()`
+3. `Terraria.Main.DrawInterface(GameTime)` + `Main.playerInventory`
 
-The repository keeps the same KernelLoader/CMake structure as v1.1.0. Push the
-source to GitHub and run the included Android workflow. The output library is:
+这样避免依赖手机版中缺失的 `Terraria.IngameOptions`。
+
+## 编译
+
+GitHub Actions 与 v1.1.0 保持一致，最终使用：
 
 `libResourceSaver.android.arm64.so`
-
-## Runtime diagnostics
-
-Look for these messages in TEFKernel logs:
-
-- `Config loaded: ...`
-- `Combat v1.2.0 hooks: ...`
-- `Combat buff v1.2.0 hook: ready`
-- `Bait saver v1.2.0 ... hook: ready`
-- `Settings UI v1.2.0: ready`
-
-If `Settings UI v1.2.0` reports `failed`, the gameplay features still load and
-`config.ini` remains usable.

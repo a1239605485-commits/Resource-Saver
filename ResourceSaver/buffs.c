@@ -6,7 +6,7 @@
 #include "config.h"
 #include "tefkernel/patchlib/method.h"
 
-/* Resource Saver v1.2.0 - combat potion buff duration +20%. */
+/* Resource Saver v1.2.1 - v1.1.0 Buff core + independent switch. */
 
 static patch_hook_id_t g_add_buff_hook = PATCH_HOOK_INVALID_ID;
 static uint64_t g_extended_buff_count = 0;
@@ -47,9 +47,7 @@ static bool add_buff_prefix(
     (void)sig;
     (void)result;
 
-    if (!resource_saver_feature_enabled(RS_FEATURE_COMBAT_BUFF))
-        return false;
-
+    if (!resource_saver_feature_enabled(RS_FEATURE_COMBAT_BUFF)) return false;
     if (!args || !args[0] || !args[1]) return false;
 
     int* type = (int*)args[0];
@@ -73,7 +71,7 @@ void resource_saver_buffs_init(void) {
         mod_logger_write(
             MOD_LOG_LEVEL_ERROR,
             "ResourceSaver",
-            "Buff v1.2.0 init failed: Terraria.Player not found"
+            "Buff v1.2.1 init failed: Terraria.Player not found"
         );
         return;
     }
@@ -89,7 +87,7 @@ void resource_saver_buffs_init(void) {
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Combat buff v1.2.0 hook: %s (id=%d AddBuff=%p)",
+        "Combat buff v1.2.1 (v1.1.0 core) hook: %s (id=%d AddBuff=%p)",
         g_add_buff_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
         (int)g_add_buff_hook,
         add_buff
