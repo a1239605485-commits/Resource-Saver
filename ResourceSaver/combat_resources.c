@@ -4,28 +4,27 @@
 #include "mod_logger.h"
 #include "tefkernel/patchlib/field.h"
 #include "tefkernel/patchlib/method.h"
+#include "tefkernel/patchlib/property.h"
 #include "tefkernel/patchlib/struct/array.h"
 
 /*
- * Resource Saver v1.0.1 - combat resources
+ * Resource Saver v1.0.2 - combat resources
  *
- * This revision intentionally avoids tModLoader-only helper methods such as
- * Player.IsAmmoFreeThisShot() and Player.GetManaCost(). The Android Terraria
- * build is vanilla IL2CPP, so we use vanilla Player/Item fields and the stable
- * Player.ResetEffects()/Player.Update(int) methods instead.
+ * Critical 1.4.5 fix:
+ * Player.selectedItem is a property in Terraria 1.4.5, not a field.
+ * We now obtain Player.HeldItem through the property's getter instead of
+ * reading selectedItem from IL2CPP fields.
  *
- * Features handled here:
- *   - Normal combat ammo: +20% conservation through vanilla ammoCost80 flag.
- *   - Rockets/special ammo: +10% conservation through vanilla huntressAmmoCost90 flag.
- *   - Magic weapon mana cost: -15%.
- *   - Summon/sentry mana cost: -25%.
+ * Features:
+ *   - Normal ammo: +20% conservation using vanilla ammoCost80.
+ *   - Rockets/special ammo: +10% conservation using huntressAmmoCost90.
+ *   - Mana-using non-summon weapons: -15% mana cost.
+ *   - Summon/sentry weapons: -25% mana cost.
  *   - Natural mana regeneration accumulation: +20%.
- *   - Melee-held potion sickness cooldown recovery: +10%.
+ *   - Melee-held potion sickness recovery: +10%.
  */
 
 /* Player fields */
-static patch_handle_t g_player_inventory = PATCH_NULL;
-static patch_handle_t g_player_selected_item = PATCH_NULL;
 static patch_handle_t g_player_potion_delay = PATCH_NULL;
 static patch_handle_t g_player_buff_type = PATCH_NULL;
 static patch_handle_t g_player_buff_time = PATCH_NULL;
@@ -37,9 +36,12 @@ static patch_handle_t g_player_mana_cost = PATCH_NULL;
 static patch_handle_t g_player_ammo_cost80 = PATCH_NULL;
 static patch_handle_t g_player_huntress_ammo_cost90 = PATCH_NULL;
 
+/* Player.HeldItem getter */
+static patch_handle_t g_held_item_getter = PATCH_NULL;
+
 /* Item fields */
 static patch_handle_t g_item_use_ammo = PATCH_NULL;
-static patch_handle_t g_item_magic = PATCH_NULL;
+static patch_handle_t g_item_mana = PATCH_NULL;
 static patch_handle_t g_item_summon = PATCH_NULL;
 static patch_handle_t g_item_sentry = PATCH_NULL;
 static patch_handle_t g_item_melee = PATCH_NULL;
@@ -131,27 +133,22 @@ static ammo_save_kind_t ammo_save_kind(int use_ammo) {
             return AMMO_SAVE_NONE;
 
         default:
-            /* Unknown future ammo receives the conservative 10% treatment. */
+            /* Future/unknown real ammo: conservative 10% bonus. */
             return use_ammo > 0 ? AMMO_SAVE_SPECIAL_10 : AMMO_SAVE_NONE;
     }
 }
 
 static patch_handle_t get_held_item(patch_handle_t player) {
-    if (!player || !g_player_inventory || !g_player_selected_item) return PATCH_NULL;
-
-    patch_handle_t inventory = PATCH_NULL;
-    int selected = -1;
-
-    patchlib_field_get_value(g_player_inventory, player, &inventory);
-    patchlib_field_get_value(g_player_selected_item, player, &selected);
-
-    if (!inventory || selected < 0) return PATCH_NULL;
-
-    size_t length = patchlib_array_length(inventory);
-    if ((size_t)selected >= length) return PATCH_NULL;
+    if (!player || !g_held_item_getter) return PATCH_NULL;
 
     patch_handle_t held = PATCH_NULL;
-    if (!patchlib_array_at(inventory, (size_t)selected, &held)) return PATCH_NULL;
+    if (!patchlib_method_invoke_args(
+            g_held_item_getter,
+            player,
+            &held,
+            NULL)) {
+        return PATCH_NULL;
+    }
 
     return held;
 }
@@ -159,9 +156,9 @@ static patch_handle_t get_held_item(patch_handle_t player) {
 /*
  * ResetEffects postfix.
  *
- * Vanilla ResetEffects resets manaCost/ammo conservation flags each tick.
- * Applying our modifiers immediately afterwards lets vanilla itself handle
- * the actual consumption checks later in the tick.
+ * Vanilla resets manaCost and ammo saving flags here every tick. We apply our
+ * modifiers immediately after the reset, so vanilla's own later consumption
+ * logic performs the actual random ammo checks.
  */
 static void reset_effects_postfix(
     patch_handle_t instance,
@@ -178,7 +175,7 @@ static void reset_effects_postfix(
     patch_handle_t held = get_held_item(instance);
     if (!held) return;
 
-    /* Ammo conservation: use Terraria's own conservation flags. */
+    /* Ammo conservation. */
     if (g_item_use_ammo) {
         int use_ammo = 0;
         patchlib_field_get_value(g_item_use_ammo, held, &use_ammo);
@@ -194,26 +191,33 @@ static void reset_effects_postfix(
         }
     }
 
-    /* Mana cost: apply by held weapon class using vanilla Item bool fields. */
-    if (g_player_mana_cost) {
-        bool is_magic = false;
-        bool is_summon = false;
-        bool is_sentry = false;
+    /*
+     * Mana cost.
+     * Use Item.mana > 0 as the broad, stable classifier. Summon/sentry gets
+     * -25%; all other mana-using weapons/items get -15%.
+     */
+    if (g_player_mana_cost && g_item_mana) {
+        int item_mana = 0;
+        patchlib_field_get_value(g_item_mana, held, &item_mana);
 
-        if (g_item_magic) patchlib_field_get_value(g_item_magic, held, &is_magic);
-        if (g_item_summon) patchlib_field_get_value(g_item_summon, held, &is_summon);
-        if (g_item_sentry) patchlib_field_get_value(g_item_sentry, held, &is_sentry);
+        if (item_mana > 0) {
+            bool is_summon = false;
+            bool is_sentry = false;
 
-        float mana_cost = 1.0f;
-        patchlib_field_get_value(g_player_mana_cost, instance, &mana_cost);
+            if (g_item_summon)
+                patchlib_field_get_value(g_item_summon, held, &is_summon);
+            if (g_item_sentry)
+                patchlib_field_get_value(g_item_sentry, held, &is_sentry);
 
-        if (is_summon || is_sentry) {
-            mana_cost *= 0.75f; /* -25% */
-            if (mana_cost < 0.05f) mana_cost = 0.05f;
-            patchlib_field_set_value(g_player_mana_cost, instance, &mana_cost);
-        }
-        else if (is_magic) {
-            mana_cost *= 0.85f; /* -15% */
+            float mana_cost = 1.0f;
+            patchlib_field_get_value(g_player_mana_cost, instance, &mana_cost);
+
+            if (is_summon || is_sentry)
+                mana_cost *= 0.75f;
+            else
+                mana_cost *= 0.85f;
+
+            /* Keep vanilla from reaching a true zero-cost multiplier. */
             if (mana_cost < 0.05f) mana_cost = 0.05f;
             patchlib_field_set_value(g_player_mana_cost, instance, &mana_cost);
         }
@@ -282,14 +286,16 @@ static void update_postfix(
             patchlib_field_get_value(g_player_stat_mana_max2, instance, &stat_mana_max2);
         }
 
-        if (mana_regen > 0 && (!g_player_stat_mana || !g_player_stat_mana_max2 || stat_mana < stat_mana_max2)) {
+        if (mana_regen > 0 &&
+            (!g_player_stat_mana || !g_player_stat_mana_max2 || stat_mana < stat_mana_max2)) {
             state->mana_regen_remainder += mana_regen;
-            int extra = state->mana_regen_remainder / 5; /* exactly 20% */
+            int extra = state->mana_regen_remainder / 5;
             state->mana_regen_remainder %= 5;
 
             if (extra > 0) {
                 mana_regen_count += extra;
-                patchlib_field_set_value(g_player_mana_regen_count, instance, &mana_regen_count);
+                patchlib_field_set_value(
+                    g_player_mana_regen_count, instance, &mana_regen_count);
             }
         }
     }
@@ -339,6 +345,7 @@ static void free_handle(patch_handle_t* h) {
 void resource_saver_combat_init(void) {
     patch_handle_t player_type = patchlib_type_get_type("Terraria", "Player");
     patch_handle_t item_type = patchlib_type_get_type("Terraria", "Item");
+    patch_handle_t held_item_property = PATCH_NULL;
 
     if (!player_type || !item_type) {
         mod_logger_write(MOD_LOG_LEVEL_ERROR, "ResourceSaver",
@@ -347,8 +354,11 @@ void resource_saver_combat_init(void) {
         goto done;
     }
 
-    g_player_inventory = patchlib_type_get_field(player_type, "inventory");
-    g_player_selected_item = patchlib_type_get_field(player_type, "selectedItem");
+    /* Terraria 1.4.5: HeldItem is a property; selectedItem is not a field. */
+    held_item_property = patchlib_type_get_property(player_type, "HeldItem");
+    if (held_item_property)
+        g_held_item_getter = patchlib_property_get_get_method(held_item_property);
+
     g_player_potion_delay = patchlib_type_get_field(player_type, "potionDelay");
     g_player_buff_type = patchlib_type_get_field(player_type, "buffType");
     g_player_buff_time = patchlib_type_get_field(player_type, "buffTime");
@@ -361,7 +371,7 @@ void resource_saver_combat_init(void) {
     g_player_huntress_ammo_cost90 = patchlib_type_get_field(player_type, "huntressAmmoCost90");
 
     g_item_use_ammo = patchlib_type_get_field(item_type, "useAmmo");
-    g_item_magic = patchlib_type_get_field(item_type, "magic");
+    g_item_mana = patchlib_type_get_field(item_type, "mana");
     g_item_summon = patchlib_type_get_field(item_type, "summon");
     g_item_sentry = patchlib_type_get_field(item_type, "sentry");
     g_item_melee = patchlib_type_get_field(item_type, "melee");
@@ -372,7 +382,7 @@ void resource_saver_combat_init(void) {
     patch_handle_t update = patchlib_type_get_method_by_param_count(
         player_type, "Update", 1);
 
-    if (reset_effects && g_player_inventory && g_player_selected_item) {
+    if (reset_effects && g_held_item_getter) {
         g_reset_effects_hook = patchlib_install_prepost_hook(
             reset_effects, NULL, reset_effects_postfix);
     }
@@ -383,15 +393,14 @@ void resource_saver_combat_init(void) {
     }
 
     mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-        "Combat hooks v1.0.1: ResetEffects=%d Update=%d | fields: inventory=%p selected=%p manaCost=%p ammo80=%p ammo90=%p magic=%p summon=%p sentry=%p",
+        "Combat hooks v1.0.2: ResetEffects=%d Update=%d | HeldItem.get=%p manaCost=%p ammo80=%p ammo90=%p itemMana=%p summon=%p sentry=%p",
         (int)g_reset_effects_hook,
         (int)g_update_hook,
-        g_player_inventory,
-        g_player_selected_item,
+        g_held_item_getter,
         g_player_mana_cost,
         g_player_ammo_cost80,
         g_player_huntress_ammo_cost90,
-        g_item_magic,
+        g_item_mana,
         g_item_summon,
         g_item_sentry);
 
@@ -401,6 +410,8 @@ void resource_saver_combat_init(void) {
 done:
     if (player_type) patchlib_free(player_type);
     if (item_type) patchlib_free(item_type);
+    /* Property metadata handle is owned by the runtime; do not free here. */
+    (void)held_item_property;
 }
 
 void resource_saver_combat_cleanup(void) {
@@ -412,8 +423,7 @@ void resource_saver_combat_cleanup(void) {
     g_reset_effects_hook = PATCH_HOOK_INVALID_ID;
     g_update_hook = PATCH_HOOK_INVALID_ID;
 
-    free_handle(&g_player_inventory);
-    free_handle(&g_player_selected_item);
+    free_handle(&g_held_item_getter);
     free_handle(&g_player_potion_delay);
     free_handle(&g_player_buff_type);
     free_handle(&g_player_buff_time);
@@ -426,7 +436,7 @@ void resource_saver_combat_cleanup(void) {
     free_handle(&g_player_huntress_ammo_cost90);
 
     free_handle(&g_item_use_ammo);
-    free_handle(&g_item_magic);
+    free_handle(&g_item_mana);
     free_handle(&g_item_summon);
     free_handle(&g_item_sentry);
     free_handle(&g_item_melee);

@@ -1,29 +1,37 @@
 #include <stddef.h>
-#include <limits.h>
-#include <stdbool.h>
 
 #include "mod_logger.h"
+#include "tefkernel/patchlib/field.h"
 #include "tefkernel/patchlib/method.h"
-#include "tefkernel/patchlib/type.h"
+#include "tefkernel/patchlib/struct/array.h"
 
 /*
- * Resource Saver v1.0.1 - combat buff duration
+ * Resource Saver v1.0.2 - combat buff duration
  *
- * Vanilla Terraria 1.4.5 Player.AddBuff is:
- *   AddBuff(int type, int time, bool fromNetPvP = false)
- * i.e. THREE parameters.
- *
- * v1.0.0 incorrectly looked for a four-parameter overload and therefore never
- * installed the hook on vanilla Android Terraria.
- *
- * TEFKernel prefix semantics:
- *   false = continue original method
- *   true  = skip original method
- *
- * v1.0.0 also returned true by mistake. Both problems are fixed here.
+ * Instead of modifying AddBuff's arguments in a prefix (which depends on the
+ * exact IL2CPP argument layout), this version directly observes Player.buffType
+ * and Player.buffTime after Player.Update(int). A new/refreshed supported buff
+ * is extended once by 20%, then tracked while it counts down normally.
  */
 
-static patch_hook_id_t g_add_buff_hook = PATCH_HOOK_INVALID_ID;
+#define RS_MAX_PLAYERS 256
+#define RS_MAX_BUFF_SLOTS 64
+
+static patch_handle_t g_player_buff_type = PATCH_NULL;
+static patch_handle_t g_player_buff_time = PATCH_NULL;
+static patch_hook_id_t g_update_hook = PATCH_HOOK_INVALID_ID;
+
+typedef struct buff_slot_state_t {
+    int type;
+    int last_time;
+} buff_slot_state_t;
+
+typedef struct player_buff_state_t {
+    patch_handle_t player;
+    buff_slot_state_t slot[RS_MAX_BUFF_SLOTS];
+} player_buff_state_t;
+
+static player_buff_state_t g_states[RS_MAX_PLAYERS];
 
 static int is_supported_combat_buff(int id) {
     switch (id) {
@@ -51,37 +59,94 @@ static int is_supported_combat_buff(int id) {
     }
 }
 
-static bool add_buff_prefix(
+static player_buff_state_t* state_for(patch_handle_t player) {
+    if (!player) return NULL;
+
+    for (size_t i = 0; i < RS_MAX_PLAYERS; ++i) {
+        if (g_states[i].player == player) return &g_states[i];
+    }
+
+    for (size_t i = 0; i < RS_MAX_PLAYERS; ++i) {
+        if (!g_states[i].player) {
+            g_states[i].player = player;
+            for (size_t j = 0; j < RS_MAX_BUFF_SLOTS; ++j) {
+                g_states[i].slot[j].type = 0;
+                g_states[i].slot[j].last_time = 0;
+            }
+            return &g_states[i];
+        }
+    }
+
+    return NULL;
+}
+
+static void update_postfix(
     patch_handle_t instance,
     void** args,
-    const patch_method_signature_t* sig,
-    void* result
+    void* result,
+    const patch_method_signature_t* sig
 ) {
-    (void)instance;
-    (void)sig;
+    (void)args;
     (void)result;
+    (void)sig;
 
-    if (!args || !args[0] || !args[1]) {
-        return false; /* continue original */
+    if (!instance || !g_player_buff_type || !g_player_buff_time) return;
+
+    patch_handle_t types = PATCH_NULL;
+    patch_handle_t times = PATCH_NULL;
+    patchlib_field_get_value(g_player_buff_type, instance, &types);
+    patchlib_field_get_value(g_player_buff_time, instance, &times);
+    if (!types || !times) return;
+
+    player_buff_state_t* state = state_for(instance);
+    if (!state) return;
+
+    size_t type_len = patchlib_array_length(types);
+    size_t time_len = patchlib_array_length(times);
+    size_t len = type_len < time_len ? type_len : time_len;
+    if (len > RS_MAX_BUFF_SLOTS) len = RS_MAX_BUFF_SLOTS;
+
+    for (size_t i = 0; i < len; ++i) {
+        int type = 0;
+        int time = 0;
+
+        if (!patchlib_array_at(types, i, &type) ||
+            !patchlib_array_at(times, i, &time)) {
+            continue;
+        }
+
+        buff_slot_state_t* slot = &state->slot[i];
+
+        if (type <= 0 || time <= 0 || !is_supported_combat_buff(type)) {
+            slot->type = type;
+            slot->last_time = time;
+            continue;
+        }
+
+        int newly_applied = (slot->type != type);
+        int refreshed = (!newly_applied && time > slot->last_time + 5);
+
+        /* Potion-style long buffs only: >= 30 seconds at 60 ticks/sec. */
+        if ((newly_applied || refreshed) && time >= 1800) {
+            int extra = time / 5;
+            if (extra > 0 && time <= 2147483647 - extra) {
+                int extended = time + extra;
+                if (patchlib_array_set(times, i, &extended)) {
+                    time = extended;
+                }
+            }
+        }
+
+        slot->type = type;
+        slot->last_time = time;
     }
+}
 
-    int* buff_type = (int*)args[0];
-    int* time_to_add = (int*)args[1];
-
-    if (!is_supported_combat_buff(*buff_type)) {
-        return false;
+static void free_handle(patch_handle_t* h) {
+    if (*h) {
+        patchlib_free(*h);
+        *h = PATCH_NULL;
     }
-
-    /* Only extend long potion-style applications (>= 30 seconds). */
-    if (*time_to_add < 1800) {
-        return false;
-    }
-
-    if (*time_to_add <= INT_MAX - (*time_to_add / 5)) {
-        *time_to_add += *time_to_add / 5; /* +20% */
-    }
-
-    return false; /* IMPORTANT: false = run vanilla AddBuff */
 }
 
 void resource_saver_buffs_init(void) {
@@ -93,28 +158,43 @@ void resource_saver_buffs_init(void) {
         return;
     }
 
-    /* Vanilla Android Terraria: AddBuff(type, time, fromNetPvP) => 3 params. */
-    patch_handle_t add_buff = patchlib_type_get_method_by_param_count(
-        player_type, "AddBuff", 3);
+    g_player_buff_type = patchlib_type_get_field(player_type, "buffType");
+    g_player_buff_time = patchlib_type_get_field(player_type, "buffTime");
 
-    if (add_buff) {
-        g_add_buff_hook = patchlib_install_prepost_hook(
-            add_buff, add_buff_prefix, NULL);
+    patch_handle_t update = patchlib_type_get_method_by_param_count(
+        player_type, "Update", 1);
+
+    if (update && g_player_buff_type && g_player_buff_time) {
+        g_update_hook = patchlib_install_prepost_hook(
+            update, NULL, update_postfix);
     }
 
     mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-                     "Combat buff duration hook v1.0.1: %s (id=%d, method=%p)",
-                     g_add_buff_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
-                     (int)g_add_buff_hook,
-                     add_buff);
+        "Combat buff hook v1.0.2: %s (id=%d Update=%p buffType=%p buffTime=%p)",
+        g_update_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
+        (int)g_update_hook,
+        update,
+        g_player_buff_type,
+        g_player_buff_time);
 
-    if (add_buff) patchlib_free(add_buff);
+    if (update) patchlib_free(update);
     patchlib_free(player_type);
 }
 
 void resource_saver_buffs_cleanup(void) {
-    if (g_add_buff_hook != PATCH_HOOK_INVALID_ID) {
-        patchlib_uninstall_hook(g_add_buff_hook);
-        g_add_buff_hook = PATCH_HOOK_INVALID_ID;
+    if (g_update_hook != PATCH_HOOK_INVALID_ID) {
+        patchlib_uninstall_hook(g_update_hook);
+        g_update_hook = PATCH_HOOK_INVALID_ID;
+    }
+
+    free_handle(&g_player_buff_type);
+    free_handle(&g_player_buff_time);
+
+    for (size_t i = 0; i < RS_MAX_PLAYERS; ++i) {
+        g_states[i].player = PATCH_NULL;
+        for (size_t j = 0; j < RS_MAX_BUFF_SLOTS; ++j) {
+            g_states[i].slot[j].type = 0;
+            g_states[i].slot[j].last_time = 0;
+        }
     }
 }
