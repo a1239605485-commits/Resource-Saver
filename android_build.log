@@ -1,9 +1,0 @@
-[ 12%] Building C object ResourceSaver/CMakeFiles/ResourceSaver.dir/__/mod-api/tefkernel/tef_api_imp.c.o
-[ 25%] Building C object ResourceSaver/CMakeFiles/ResourceSaver.dir/mod.c.o
-[ 37%] Building C object ResourceSaver/CMakeFiles/ResourceSaver.dir/config.c.o
-[ 50%] Building C object ResourceSaver/CMakeFiles/ResourceSaver.dir/settings_ui.c.o
-[ 62%] Building C object ResourceSaver/CMakeFiles/ResourceSaver.dir/combat_resources.c.o
-[ 75%] Building C object ResourceSaver/CMakeFiles/ResourceSaver.dir/buffs.c.o
-[ 87%] Building C object ResourceSaver/CMakeFiles/ResourceSaver.dir/fishing.c.o
-[100%] Linking C shared library libResourceSaver.linux.x64.so
-[100%] Built target ResourceSaver
