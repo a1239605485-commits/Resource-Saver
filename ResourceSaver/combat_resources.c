@@ -3,18 +3,20 @@
 #include <stdint.h>
 
 #include "mod_logger.h"
+#include "config.h"
 #include "tefkernel/patchlib/field.h"
 #include "tefkernel/patchlib/method.h"
 #include "tefkernel/patchlib/property.h"
 #include "tefkernel/patchlib/struct/array.h"
 
 /*
- * Resource Saver v1.1.0 - precise combat resource rules
+ * Resource Saver v1.2.0 - precise combat resource rules
  *
  * Stable base: v1.0.3 proved that ResetEffects + Update and these Player
  * fields work on Terraria Android 1.4.5.6.4.
  *
- * v1.1.0 keeps that base and only adds classification when HeldItem is
+ * v1.1.1 keeps that base and fixes mana saving by temporarily modifying the
+ * held Item.mana only during Player.Update. Classification still uses HeldItem when it is
  * available. If HeldItem cannot be read in a frame, the code falls back to
  * the v1.0.3 behavior instead of aborting the whole feature.
  *
@@ -22,8 +24,8 @@
  *   regular ammo                  -> +20% vanilla conservation flag
  *   rockets / rare special ammo  -> +10% vanilla conservation flag
  *   sand / solution tool ammo    -> no Resource Saver conservation
- *   all mana use                 -> manaCost x 0.85
- *   summon / sentry mana use     -> manaCost x 0.75
+ *   all mana use                 -> temporary Item.mana x 0.85 during Update
+ *   summon / sentry mana use     -> temporary Item.mana x 0.75 during Update
  *   natural mana regen           -> +20%
  *   melee-held potion sickness   -> recovers 10% faster
  */
@@ -58,6 +60,7 @@ static patch_handle_t g_player_stat_mana_max2 = PATCH_NULL;
 static patch_handle_t g_player_mana_cost = PATCH_NULL;
 static patch_handle_t g_player_ammo_cost80 = PATCH_NULL;
 static patch_handle_t g_player_huntress_ammo_cost90 = PATCH_NULL;
+static patch_handle_t g_player_inventory = PATCH_NULL;
 
 static patch_handle_t g_held_item_getter = PATCH_NULL;
 static patch_handle_t g_item_mana = PATCH_NULL;
@@ -78,6 +81,11 @@ typedef struct player_runtime_state_t {
     int held_is_melee;
     int held_is_summon;
     int held_use_ammo;
+
+    /* Temporary mana overrides. Restored at the end of the same Player.Update. */
+    patch_handle_t mana_items[64];
+    int mana_original[64];
+    int mana_count;
 } player_runtime_state_t;
 
 static player_runtime_state_t g_states[256];
@@ -108,6 +116,11 @@ static player_runtime_state_t* state_for(patch_handle_t player) {
             g_states[i].held_is_melee = 0;
             g_states[i].held_is_summon = 0;
             g_states[i].held_use_ammo = 0;
+            g_states[i].mana_count = 0;
+            for (int j = 0; j < 64; ++j) {
+                g_states[i].mana_items[j] = PATCH_NULL;
+                g_states[i].mana_original[j] = 0;
+            }
             return &g_states[i];
         }
     }
@@ -181,7 +194,7 @@ static void classify_held_item(
             mod_logger_write(
                 MOD_LOG_LEVEL_WARNING,
                 "ResourceSaver",
-                "HeldItem runtime read failed; v1.1.0 will use stable fallback rules for this frame"
+                "HeldItem runtime read failed; v1.2.0 will use stable fallback rules for this frame"
             );
         }
         return;
@@ -243,16 +256,21 @@ static void reset_effects_postfix(
     classify_held_item(instance, state, &held);
     (void)held;
 
+    if (!resource_saver_feature_enabled(RS_FEATURE_MASTER)) {
+        return;
+    }
+
     /*
      * Ammo saving.
-     * When classification works, use the requested 20% / 10% split.
-     * If HeldItem cannot be read, retain v1.0.3's proven 20% fallback.
+     * Regular and special ammo have independent switches.
      */
     if (g_player_ammo_cost80 || g_player_huntress_ammo_cost90) {
         bool enabled = true;
+        bool regular_enabled = resource_saver_feature_enabled(RS_FEATURE_REGULAR_AMMO);
+        bool special_enabled = resource_saver_feature_enabled(RS_FEATURE_SPECIAL_AMMO);
 
         if (!state->held_class_valid) {
-            if (g_player_ammo_cost80) {
+            if (regular_enabled && g_player_ammo_cost80) {
                 patchlib_field_set_value(g_player_ammo_cost80, instance, &enabled);
                 ++g_stat_ammo20_frames;
             }
@@ -261,57 +279,177 @@ static void reset_effects_postfix(
             int use_ammo = state->held_use_ammo;
 
             if (use_ammo == RS_AMMO_NONE || is_tool_ammo_group(use_ammo)) {
-                /* No Resource Saver ammo flag for non-ammo or tool ammo. */
+                /* Non-ammo or tool ammo: do nothing. */
             }
             else if (is_regular_ammo_group(use_ammo)) {
-                if (g_player_ammo_cost80) {
+                if (regular_enabled && g_player_ammo_cost80) {
                     patchlib_field_set_value(g_player_ammo_cost80, instance, &enabled);
                     ++g_stat_ammo20_frames;
                 }
             }
             else if (is_special_ammo_group(use_ammo)) {
-                if (g_player_huntress_ammo_cost90) {
+                if (special_enabled && g_player_huntress_ammo_cost90) {
                     patchlib_field_set_value(g_player_huntress_ammo_cost90, instance, &enabled);
                     ++g_stat_ammo10_frames;
                 }
-                else if (g_player_ammo_cost80) {
-                    /* Compatibility fallback if the 10% field is absent. */
+                else if (special_enabled && !g_player_huntress_ammo_cost90 && g_player_ammo_cost80) {
                     patchlib_field_set_value(g_player_ammo_cost80, instance, &enabled);
                     ++g_stat_ammo20_frames;
                 }
             }
-            else {
-                /* Unknown/custom vanilla ammo group: conservative 10%. */
-                if (g_player_huntress_ammo_cost90) {
-                    patchlib_field_set_value(g_player_huntress_ammo_cost90, instance, &enabled);
-                    ++g_stat_ammo10_frames;
-                }
+            else if (special_enabled && g_player_huntress_ammo_cost90) {
+                /* Unknown ammo group: conservative 10%. */
+                patchlib_field_set_value(g_player_huntress_ammo_cost90, instance, &enabled);
+                ++g_stat_ammo10_frames;
             }
         }
     }
 
     /*
-     * Mana saving.
-     * Base -15% is always stable. Summon/sentry upgrades to -25% when the
-     * held item classification succeeds.
+     * Mana saving is intentionally NOT applied through Player.manaCost here.
+     * Terraria 1.4.5 split the mana-payment path into new helper methods, and
+     * on the Android build tested by the user changing manaCost here did not
+     * affect the actual mana paid. v1.1.1 therefore changes Item.mana only
+     * while Player.Update is executing (see update_prefix/update_postfix).
      */
-    if (g_player_mana_cost) {
-        float mana_cost = 1.0f;
-        patchlib_field_get_value(g_player_mana_cost, instance, &mana_cost);
+}
 
-        float multiplier = 0.85f;
-        if (state->held_class_valid && state->held_is_summon) {
-            multiplier = 0.75f;
-            ++g_stat_summon25_frames;
-        }
-        else {
-            ++g_stat_mana15_frames;
-        }
+static void restore_temporary_item_mana(player_runtime_state_t* state) {
+    if (!state || !g_item_mana) return;
 
-        mana_cost *= multiplier;
-        if (mana_cost < 0.05f) mana_cost = 0.05f;
-        patchlib_field_set_value(g_player_mana_cost, instance, &mana_cost);
+    for (int i = 0; i < state->mana_count && i < 64; ++i) {
+        if (!state->mana_items[i]) continue;
+        patchlib_field_set_value(
+            g_item_mana,
+            state->mana_items[i],
+            &state->mana_original[i]
+        );
+        state->mana_items[i] = PATCH_NULL;
+        state->mana_original[i] = 0;
     }
+
+    state->mana_count = 0;
+}
+
+static int calculate_reduced_mana(int base, int percent) {
+    if (base <= 0) return base;
+
+    /* Round to nearest integer. Never turn a mana-using item into zero cost. */
+    int reduced = (base * percent + 50) / 100;
+    if (reduced < 1) reduced = 1;
+    if (reduced > base) reduced = base;
+    return reduced;
+}
+
+/*
+ * Apply the mana override for exactly one Player.Update call.
+ *
+ * This is intentionally a prefix/postfix pair around Player.Update instead of
+ * a permanent Item edit. Any vanilla 1.4.5 mana-payment helper executed from
+ * Player.Update reads the reduced Item.mana, and the original value is put
+ * back immediately after the update finishes.
+ */
+static bool update_prefix(
+    patch_handle_t instance,
+    void** args,
+    const patch_method_signature_t* sig,
+    void* result
+) {
+    (void)args;
+    (void)sig;
+    (void)result;
+
+    if (!instance) return false;
+
+    player_runtime_state_t* state = state_for(instance);
+    if (!state) return false;
+
+    /* Safety: recover from an interrupted/previous frame before applying again. */
+    restore_temporary_item_mana(state);
+
+    if (!resource_saver_feature_enabled(RS_FEATURE_MASTER)) {
+        return false;
+    }
+
+    bool magic_enabled = resource_saver_feature_enabled(RS_FEATURE_MAGIC_MANA);
+    bool summon_enabled = resource_saver_feature_enabled(RS_FEATURE_SUMMON_MANA);
+
+    if (!magic_enabled && !summon_enabled) {
+        return false;
+    }
+
+    /*
+     * Do NOT depend on HeldItem for mana saving.
+     * Temporarily lower Item.mana for every mana-using item in the player's
+     * 59-slot inventory while vanilla Player.Update executes. This makes the
+     * 1.4.5 mana-payment helpers read the reduced value regardless of which
+     * exact internal PayMana method is used.
+     */
+    if (g_player_inventory && g_item_mana) {
+        patch_handle_t inventory = PATCH_NULL;
+        patchlib_field_get_value(g_player_inventory, instance, &inventory);
+
+        if (inventory) {
+            size_t len = patchlib_array_length(inventory);
+            if (len > 64) len = 64;
+
+            for (size_t i = 0; i < len; ++i) {
+                patch_handle_t item = PATCH_NULL;
+                if (!patchlib_array_at(inventory, i, &item) || !item) continue;
+
+                int base_mana = 0;
+                patchlib_field_get_value(g_item_mana, item, &base_mana);
+                if (base_mana <= 0) continue;
+
+                bool summon = false;
+                bool sentry = false;
+                if (g_item_summon) patchlib_field_get_value(g_item_summon, item, &summon);
+                if (g_item_sentry) patchlib_field_get_value(g_item_sentry, item, &sentry);
+
+                int is_summon_item = (summon || sentry) ? 1 : 0;
+                int percent = 100;
+
+                if (is_summon_item) {
+                    if (!summon_enabled) continue;
+                    percent = 75;
+                }
+                else {
+                    if (!magic_enabled) continue;
+                    percent = 85;
+                }
+
+                int reduced_mana = calculate_reduced_mana(base_mana, percent);
+                if (reduced_mana >= base_mana) continue;
+
+                int slot = state->mana_count;
+                if (slot >= 64) break;
+
+                state->mana_items[slot] = item;
+                state->mana_original[slot] = base_mana;
+                state->mana_count++;
+
+                patchlib_field_set_value(g_item_mana, item, &reduced_mana);
+
+                if (percent == 75) ++g_stat_summon25_frames;
+                else ++g_stat_mana15_frames;
+
+                static int logged_once = 0;
+                if (!logged_once) {
+                    logged_once = 1;
+                    mod_logger_write(
+                        MOD_LOG_LEVEL_INFO,
+                        "ResourceSaver",
+                        "Mana saver v1.2.0 active: inventory Item.mana %d -> %d (%s)",
+                        base_mana,
+                        reduced_mana,
+                        percent == 75 ? "summon/sentry -25%" : "magic -15%"
+                    );
+                }
+            }
+        }
+    }
+
+    return false; /* continue vanilla Player.Update */
 }
 
 static void reduce_potion_sickness_buff_one_tick(patch_handle_t player) {
@@ -358,8 +496,12 @@ static void update_postfix(
     player_runtime_state_t* state = state_for(instance);
     if (!state) return;
 
+    /* The mana-saving Item.mana override is needed only inside vanilla Update. */
+    restore_temporary_item_mana(state);
+
     /* +20% natural mana-regeneration accumulation. */
-    if (g_player_mana_regen && g_player_mana_regen_count) {
+    if (resource_saver_feature_enabled(RS_FEATURE_MANA_REGEN) &&
+        g_player_mana_regen && g_player_mana_regen_count) {
         int mana_regen = 0;
         int mana_regen_count = 0;
         int stat_mana = 0;
@@ -387,7 +529,11 @@ static void update_postfix(
     }
 
     /* Melee-only potion sickness recovery +10%. */
-    if (g_player_potion_delay) {
+    if (!resource_saver_feature_enabled(RS_FEATURE_MELEE_POTION)) {
+        state->potion_tick = 0;
+    }
+    if (resource_saver_feature_enabled(RS_FEATURE_MELEE_POTION) &&
+        g_player_potion_delay) {
         int potion_delay = 0;
         patchlib_field_get_value(g_player_potion_delay, instance, &potion_delay);
 
@@ -424,7 +570,7 @@ void resource_saver_combat_init(void) {
         mod_logger_write(
             MOD_LOG_LEVEL_ERROR,
             "ResourceSaver",
-            "Combat v1.1.0 init failed: Player=%p Item=%p",
+            "Combat v1.2.0 init failed: Player=%p Item=%p",
             player_type,
             item_type
         );
@@ -441,6 +587,7 @@ void resource_saver_combat_init(void) {
     g_player_mana_cost = patchlib_type_get_field(player_type, "manaCost");
     g_player_ammo_cost80 = patchlib_type_get_field(player_type, "ammoCost80");
     g_player_huntress_ammo_cost90 = patchlib_type_get_field(player_type, "huntressAmmoCost90");
+    g_player_inventory = patchlib_type_get_field(player_type, "inventory");
 
     held_item_property = patchlib_type_get_property(player_type, "HeldItem");
     if (held_item_property)
@@ -458,25 +605,27 @@ void resource_saver_combat_init(void) {
     patch_handle_t update = patchlib_type_get_method_by_param_count(
         player_type, "Update", 1);
 
-    if (reset_effects && g_player_ammo_cost80 && g_player_mana_cost) {
+    if (reset_effects && g_player_ammo_cost80) {
         g_reset_effects_hook = patchlib_install_prepost_hook(
             reset_effects, NULL, reset_effects_postfix);
     }
 
     if (update) {
         g_update_hook = patchlib_install_prepost_hook(
-            update, NULL, update_postfix);
+            update, update_prefix, update_postfix);
     }
 
     mod_logger_write(
         MOD_LOG_LEVEL_INFO,
         "ResourceSaver",
-        "Combat v1.1.0 hooks: ResetEffects=%d Update=%d ammo20=%p ammo10=%p manaCost=%p HeldItem=%p useAmmo=%p melee=%p summon=%p sentry=%p",
+        "Combat v1.2.0 hooks: ResetEffects=%d Update=%d ammo20=%p ammo10=%p manaCostField=%p inventory=%p itemMana=%p HeldItem=%p useAmmo=%p melee=%p summon=%p sentry=%p",
         (int)g_reset_effects_hook,
         (int)g_update_hook,
         g_player_ammo_cost80,
         g_player_huntress_ammo_cost90,
         g_player_mana_cost,
+        g_player_inventory,
+        g_item_mana,
         g_held_item_getter,
         g_item_use_ammo,
         g_item_melee,
@@ -506,6 +655,11 @@ void resource_saver_combat_cleanup(void) {
         (unsigned long long)g_stat_held_fallback_frames
     );
 
+    /* Never leave an inventory Item with a temporary mana value on unload. */
+    for (size_t i = 0; i < 256; ++i) {
+        restore_temporary_item_mana(&g_states[i]);
+    }
+
     if (g_reset_effects_hook != PATCH_HOOK_INVALID_ID)
         patchlib_uninstall_hook(g_reset_effects_hook);
     if (g_update_hook != PATCH_HOOK_INVALID_ID)
@@ -524,6 +678,7 @@ void resource_saver_combat_cleanup(void) {
     free_handle(&g_player_mana_cost);
     free_handle(&g_player_ammo_cost80);
     free_handle(&g_player_huntress_ammo_cost90);
+    free_handle(&g_player_inventory);
 
     free_handle(&g_held_item_getter);
     free_handle(&g_item_mana);
@@ -541,5 +696,10 @@ void resource_saver_combat_cleanup(void) {
         g_states[i].held_is_melee = 0;
         g_states[i].held_is_summon = 0;
         g_states[i].held_use_ammo = 0;
+        g_states[i].mana_count = 0;
+        for (int j = 0; j < 64; ++j) {
+            g_states[i].mana_items[j] = PATCH_NULL;
+            g_states[i].mana_original[j] = 0;
+        }
     }
 }
