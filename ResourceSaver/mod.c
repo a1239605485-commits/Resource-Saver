@@ -20,15 +20,21 @@ void resource_saver_fishing_cleanup(void);
 static void init_mod(kernel_mod_handle_t* handle) {
     (void)handle;
 
-    mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-                     "Resource Saver v1.0.3 initializing (author: liuxin)");
+    mod_logger_write(
+        MOD_LOG_LEVEL_INFO,
+        "ResourceSaver",
+        "Resource Saver v1.1.0 initializing (author: liuxin)"
+    );
 
     resource_saver_combat_init();
     resource_saver_buffs_init();
     resource_saver_fishing_init();
 
-    mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-                     "Resource Saver v1.0.3 initialized");
+    mod_logger_write(
+        MOD_LOG_LEVEL_INFO,
+        "ResourceSaver",
+        "Resource Saver v1.1.0 initialized"
+    );
 }
 
 static void cleanup_mod(kernel_mod_handle_t* handle) {
@@ -38,15 +44,18 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     resource_saver_buffs_cleanup();
     resource_saver_combat_cleanup();
 
-    mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-                     "Resource Saver v1.0.3 unloaded");
+    mod_logger_write(
+        MOD_LOG_LEVEL_INFO,
+        "ResourceSaver",
+        "Resource Saver v1.1.0 unloaded"
+    );
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "celso.resourcesaver",
-    .version_code = 202608274,
+    .version_code = 202608275,
     .api_version = 1,
-    .version = "1.0.3"
+    .version = "1.1.0"
 };
 
 static kernel_mod_info_t* get_info(void) {

@@ -1,18 +1,14 @@
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "mod_logger.h"
 #include "tefkernel/patchlib/method.h"
 
-/*
- * Resource Saver v1.0.3 - combat buff duration
- *
- * Vanilla Terraria has Player.AddBuff(int type, int time, bool fromNetPvP).
- * Hooking the application point is simpler and more reliable than watching
- * buff arrays after Player.Update.
- */
+/* Resource Saver v1.1.0 - combat potion buff duration +20%. */
 
 static patch_hook_id_t g_add_buff_hook = PATCH_HOOK_INVALID_ID;
+static uint64_t g_extended_buff_count = 0;
 
 static int is_supported_combat_buff(int id) {
     switch (id) {
@@ -58,9 +54,10 @@ static bool add_buff_prefix(
     if (!type || !time) return false;
     if (!is_supported_combat_buff(*type)) return false;
 
-    /* Only long potion-like buffs (30 seconds or more). */
+    /* Only long potion-like buffs: at least 30 seconds. */
     if (*time >= 1800 && *time <= 1789569705) {
-        *time += *time / 5; /* +20% */
+        *time += *time / 5;
+        ++g_extended_buff_count;
     }
 
     return false; /* continue vanilla AddBuff */
@@ -69,8 +66,11 @@ static bool add_buff_prefix(
 void resource_saver_buffs_init(void) {
     patch_handle_t player_type = patchlib_type_get_type("Terraria", "Player");
     if (!player_type) {
-        mod_logger_write(MOD_LOG_LEVEL_ERROR, "ResourceSaver",
-            "Buff v1.0.3 init failed: Terraria.Player not found");
+        mod_logger_write(
+            MOD_LOG_LEVEL_ERROR,
+            "ResourceSaver",
+            "Buff v1.1.0 init failed: Terraria.Player not found"
+        );
         return;
     }
 
@@ -82,17 +82,27 @@ void resource_saver_buffs_init(void) {
             add_buff, add_buff_prefix, NULL);
     }
 
-    mod_logger_write(MOD_LOG_LEVEL_INFO, "ResourceSaver",
-        "Combat buff v1.0.3 hook: %s (id=%d AddBuff=%p)",
+    mod_logger_write(
+        MOD_LOG_LEVEL_INFO,
+        "ResourceSaver",
+        "Combat buff v1.1.0 hook: %s (id=%d AddBuff=%p)",
         g_add_buff_hook == PATCH_HOOK_INVALID_ID ? "failed" : "ready",
         (int)g_add_buff_hook,
-        add_buff);
+        add_buff
+    );
 
     if (add_buff) patchlib_free(add_buff);
     patchlib_free(player_type);
 }
 
 void resource_saver_buffs_cleanup(void) {
+    mod_logger_write(
+        MOD_LOG_LEVEL_INFO,
+        "ResourceSaver",
+        "Buff diagnostics: extended=%llu",
+        (unsigned long long)g_extended_buff_count
+    );
+
     if (g_add_buff_hook != PATCH_HOOK_INVALID_ID) {
         patchlib_uninstall_hook(g_add_buff_hook);
         g_add_buff_hook = PATCH_HOOK_INVALID_ID;
