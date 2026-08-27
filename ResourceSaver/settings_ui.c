@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "config.h"
 #include "mod_logger.h"
@@ -10,58 +11,56 @@
 #include "tefkernel/patchlib/struct/string.h"
 
 /*
- * Resource Saver v1.2.6 - Android verified inventory UI
+ * Resource Saver v1.2.7 - Safe Chinese settings UI
  *
- * Verified by the user's Android 1.4.5.6.4 runtime log:
- *   Terraria.Main.DrawInterface_27_Inventory  EXISTS
- *   Terraria.Utils.DrawBorderString           EXISTS
- *   SpriteBatch._beginCalled                  expected MonoGame state field
+ * Why this version exists:
+ * v1.2.6 proved that DrawInterface_27_Inventory itself can be hooked, but
+ * invoking Terraria.Utils.DrawBorderString through patchlib caused IL2CPP to
+ * abort when the world began drawing. DrawBorderString uses Vector2/Color
+ * value-type parameters, while TEFKernel's generic invoke API only exposes
+ * primitive/object parameter categories. We therefore stop calling any draw
+ * method that requires value-type structs.
+ *
+ * This version delegates all actual rendering to vanilla Main.MouseText(...),
+ * whose explicit parameters are only String/int/byte/int/int/int/int. Terraria
+ * internally handles SpriteBatch, fonts, colors and Vector2 values.
  *
  * Safety rules:
- * 1) Hook the verified inventory method by exact name, not param-count lookup.
- * 2) Never call SpriteBatch.Begin/End ourselves.
- * 3) Draw only when SpriteBatch._beginCalled == true.
- * 4) If the batch is not active, skip that stage instead of risking a crash.
- *
- * We attach both Prefix and Postfix. The overlay is drawn at whichever side of
- * DrawInterface_27_Inventory still has an active SpriteBatch. A per-call guard
- * prevents double rendering if both sides happen to be active.
+ *   1. Core gameplay code remains based on v1.1.0.
+ *   2. UI uses a POSTFIX only; the vanilla draw method is never skipped.
+ *   3. No SpriteBatch.Begin/End calls.
+ *   4. No DrawBorderString/DrawString/Vector2/Color reflection calls.
+ *   5. UI renders only while vanilla SpriteBatch is already active.
+ *   6. If any required method/field is missing, the UI simply disables itself.
  */
 
-typedef struct rs_vector2_t {
-    float x;
-    float y;
-} rs_vector2_t;
-
-typedef struct rs_color_t {
-    uint32_t packed_value;
-} rs_color_t;
-
+static patch_handle_t g_main_instance = PATCH_NULL;
 static patch_handle_t g_main_mouse_x = PATCH_NULL;
 static patch_handle_t g_main_mouse_y = PATCH_NULL;
 static patch_handle_t g_main_mouse_left = PATCH_NULL;
 static patch_handle_t g_main_screen_width = PATCH_NULL;
 static patch_handle_t g_main_screen_height = PATCH_NULL;
-static patch_handle_t g_main_ui_scale = PATCH_NULL;
+static patch_handle_t g_main_player_inventory = PATCH_NULL;
 static patch_handle_t g_main_sprite_batch = PATCH_NULL;
-
 static patch_handle_t g_sprite_batch_begin_called = PATCH_NULL;
-static patch_handle_t g_utils_draw_border_string = PATCH_NULL;
 
-static patch_hook_id_t g_inventory_hook = PATCH_HOOK_INVALID_ID;
+static patch_handle_t g_mouse_text_method = PATCH_NULL;
+static bool g_mouse_text_is_instance = true;
+
+static patch_hook_id_t g_ui_hook = PATCH_HOOK_INVALID_ID;
+
+static patch_handle_t g_entry_text = PATCH_NULL;
+static patch_handle_t g_panel_text = PATCH_NULL;
 
 static bool g_panel_open = false;
 static bool g_prev_mouse_left = false;
-static bool g_drawn_this_inventory_call = false;
 
-static patch_handle_t g_entry_open = PATCH_NULL;
-static patch_handle_t g_entry_close = PATCH_NULL;
-static patch_handle_t g_title = PATCH_NULL;
-static patch_handle_t g_tip = PATCH_NULL;
-static patch_handle_t g_restore = PATCH_NULL;
-static patch_handle_t g_close = PATCH_NULL;
-static patch_handle_t g_on_labels[RS_FEATURE_COUNT];
-static patch_handle_t g_off_labels[RS_FEATURE_COUNT];
+/* Generous touch hitboxes for Android. */
+static const int ENTRY_WIDTH = 430;
+static const int ENTRY_HEIGHT = 56;
+static const int PANEL_WIDTH = 700;
+static const int PANEL_ROW_HEIGHT = 38;
+static const int PANEL_TOP_PADDING = 18;
 
 static const char* g_feature_names[RS_FEATURE_COUNT] = {
     "总开关",
@@ -75,23 +74,6 @@ static const char* g_feature_names[RS_FEATURE_COUNT] = {
     "鱼饵节省 20%"
 };
 
-static rs_color_t make_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    rs_color_t c;
-    c.packed_value = ((uint32_t)r) |
-                     ((uint32_t)g << 8) |
-                     ((uint32_t)b << 16) |
-                     ((uint32_t)a << 24);
-    return c;
-}
-
-static int point_in_rect(int mx, int my, int x, int y, int w, int h) {
-    return mx >= x && mx < x + w && my >= y && my < y + h;
-}
-
-static patch_handle_t make_text(const char* s) {
-    return s ? patchlib_string_create(s) : PATCH_NULL;
-}
-
 static void free_handle(patch_handle_t* h) {
     if (h && *h) {
         patchlib_free(*h);
@@ -99,90 +81,198 @@ static void free_handle(patch_handle_t* h) {
     }
 }
 
-static void init_texts(void) {
-    g_entry_open = make_text("【资源节省设置】 点击打开");
-    g_entry_close = make_text("【资源节省设置】 点击收起");
-    g_title = make_text("—— 精打细算：资源节省设置 ——");
-    g_tip = make_text("点击对应项目即可开启或关闭，设置自动保存");
-    g_restore = make_text("【恢复默认设置】");
-    g_close = make_text("【关闭设置面板】");
-
-    for (int i = 0; i < RS_FEATURE_COUNT; ++i) {
-        char on[192];
-        char off[192];
-        snprintf(on, sizeof(on), "%s    【开启】", g_feature_names[i]);
-        snprintf(off, sizeof(off), "%s    【关闭】", g_feature_names[i]);
-        g_on_labels[i] = make_text(on);
-        g_off_labels[i] = make_text(off);
-    }
+static int point_in_rect(int mx, int my, int x, int y, int w, int h) {
+    return mx >= x && mx < x + w && my >= y && my < y + h;
 }
 
-static int draw_text(
-    patch_handle_t sprite_batch,
-    patch_handle_t text,
-    float x,
-    float y,
-    rs_color_t color,
-    float scale
-) {
-    if (!sprite_batch || !text || !g_utils_draw_border_string) return 0;
+static void rebuild_panel_text(void) {
+    free_handle(&g_panel_text);
 
-    rs_vector2_t pos = { x, y };
-    rs_vector2_t result_size = { 0.0f, 0.0f };
-    float anchor_x = 0.0f;
-    float anchor_y = 0.0f;
-    int max_chars = -1;
+    char buffer[2048];
+    size_t used = 0;
 
-    void* args[8] = {
-        &sprite_batch,
-        &text,
-        &pos,
-        &color,
-        &scale,
-        &anchor_x,
-        &anchor_y,
-        &max_chars
-    };
+    int n = snprintf(
+        buffer + used,
+        sizeof(buffer) - used,
+        "【精打细算：资源节省设置】\n"
+        "点击对应项目即可开启或关闭，设置会自动保存\n"
+    );
+    if (n < 0) return;
+    used += (size_t)n;
 
-    return patchlib_method_invoke_args(
-        g_utils_draw_border_string,
-        PATCH_NULL,
-        &result_size,
-        args
-    ) ? 1 : 0;
+    for (int i = 0; i < RS_FEATURE_COUNT && used < sizeof(buffer); ++i) {
+        bool enabled = resource_saver_feature_raw_enabled((rs_feature_t)i);
+        n = snprintf(
+            buffer + used,
+            sizeof(buffer) - used,
+            "%s    【%s】\n",
+            g_feature_names[i],
+            enabled ? "开启" : "关闭"
+        );
+        if (n < 0) return;
+        if ((size_t)n >= sizeof(buffer) - used) {
+            used = sizeof(buffer) - 1;
+            break;
+        }
+        used += (size_t)n;
+    }
+
+    if (used < sizeof(buffer)) {
+        n = snprintf(
+            buffer + used,
+            sizeof(buffer) - used,
+            "【恢复默认设置】\n"
+            "【关闭设置面板】"
+        );
+        if (n > 0) {
+            size_t add = (size_t)n;
+            if (add >= sizeof(buffer) - used) add = sizeof(buffer) - used - 1;
+            used += add;
+        }
+    }
+
+    buffer[sizeof(buffer) - 1] = '\0';
+    g_panel_text = patchlib_string_create(buffer);
+}
+
+static patch_handle_t get_main_instance(void) {
+    if (!g_mouse_text_is_instance) return PATCH_NULL;
+    if (!g_main_instance) return PATCH_NULL;
+
+    patch_handle_t instance = PATCH_NULL;
+    patchlib_field_get_value(g_main_instance, PATCH_NULL, &instance);
+    return instance;
 }
 
 static patch_handle_t get_sprite_batch(void) {
+    if (!g_main_sprite_batch) return PATCH_NULL;
     patch_handle_t sb = PATCH_NULL;
-    if (g_main_sprite_batch) {
-        patchlib_field_get_value(g_main_sprite_batch, PATCH_NULL, &sb);
-    }
+    patchlib_field_get_value(g_main_sprite_batch, PATCH_NULL, &sb);
     return sb;
 }
 
-static bool sprite_batch_is_active(patch_handle_t sb) {
-    if (!sb || !g_sprite_batch_begin_called) return false;
+static bool sprite_batch_is_active(void) {
+    if (!g_sprite_batch_begin_called) return false;
+
+    patch_handle_t sb = get_sprite_batch();
+    if (!sb) return false;
+
     bool active = false;
     patchlib_field_get_value(g_sprite_batch_begin_called, sb, &active);
     return active;
 }
 
-static float get_ui_scale(void) {
-    float scale = 1.0f;
-    if (g_main_ui_scale) {
-        patchlib_field_get_value(g_main_ui_scale, PATCH_NULL, &scale);
-    }
-    if (scale < 0.5f || scale > 4.0f) scale = 1.0f;
-    return scale;
+/*
+ * Vanilla Main.MouseText signature used here:
+ *   MouseText(string cursorText,
+ *             int rare,
+ *             byte diff,
+ *             int hackedMouseX,
+ *             int hackedMouseY,
+ *             int hackedScreenWidth,
+ *             int hackedScreenHeight)
+ *
+ * All explicit parameters are primitive/object types, so this is much safer
+ * for patchlib_method_invoke_args than DrawBorderString(Vector2, Color, ...).
+ */
+static bool vanilla_mouse_text(
+    patch_handle_t text,
+    int x,
+    int y,
+    int screen_width,
+    int screen_height
+) {
+    if (!g_mouse_text_method || !text) return false;
+
+    patch_handle_t instance = get_main_instance();
+    if (g_mouse_text_is_instance && !instance) return false;
+
+    int rare = 0;
+    uint8_t diff = 0;
+
+    void* args[7] = {
+        &text,
+        &rare,
+        &diff,
+        &x,
+        &y,
+        &screen_width,
+        &screen_height
+    };
+
+    return patchlib_method_invoke_args(
+        g_mouse_text_method,
+        g_mouse_text_is_instance ? instance : PATCH_NULL,
+        NULL,
+        args
+    );
 }
 
-static void draw_and_handle_settings(void) {
-    if (g_drawn_this_inventory_call) return;
+static void handle_panel_click(
+    int mouse_x,
+    int mouse_y,
+    int panel_x,
+    int panel_y,
+    bool click
+) {
+    if (!click) return;
 
-    patch_handle_t sb = get_sprite_batch();
-    if (!sprite_batch_is_active(sb)) return;
+    /*
+     * MouseText adds a small vanilla offset around the supplied hacked mouse
+     * coordinates. Hitboxes are intentionally wide/tall to remain easy to tap.
+     *
+     * Row mapping inside our multiline text:
+     *   line 0 title
+     *   line 1 hint
+     *   lines 2..10 features 0..8
+     *   line 11 restore defaults
+     *   line 12 close panel
+     */
+    int content_y = panel_y + PANEL_TOP_PADDING;
+    int feature_start_y = content_y + PANEL_ROW_HEIGHT * 2;
 
-    g_drawn_this_inventory_call = true;
+    for (int i = 0; i < RS_FEATURE_COUNT; ++i) {
+        int row_y = feature_start_y + PANEL_ROW_HEIGHT * i;
+        if (point_in_rect(mouse_x, mouse_y, panel_x, row_y,
+                          PANEL_WIDTH, PANEL_ROW_HEIGHT)) {
+            resource_saver_config_toggle((rs_feature_t)i);
+            rebuild_panel_text();
+            return;
+        }
+    }
+
+    int restore_y = feature_start_y + PANEL_ROW_HEIGHT * RS_FEATURE_COUNT;
+    if (point_in_rect(mouse_x, mouse_y, panel_x, restore_y,
+                      PANEL_WIDTH, PANEL_ROW_HEIGHT)) {
+        resource_saver_config_restore_defaults();
+        rebuild_panel_text();
+        return;
+    }
+
+    int close_y = restore_y + PANEL_ROW_HEIGHT;
+    if (point_in_rect(mouse_x, mouse_y, panel_x, close_y,
+                      PANEL_WIDTH, PANEL_ROW_HEIGHT)) {
+        g_panel_open = false;
+    }
+}
+
+static void draw_and_handle_ui(void) {
+    /* Settings are intentionally available only while inventory is open. */
+    if (g_main_player_inventory) {
+        bool inventory_open = false;
+        patchlib_field_get_value(g_main_player_inventory, PATCH_NULL, &inventory_open);
+        if (!inventory_open) {
+            if (g_main_mouse_left) {
+                bool left = false;
+                patchlib_field_get_value(g_main_mouse_left, PATCH_NULL, &left);
+                g_prev_mouse_left = left;
+            }
+            return;
+        }
+    }
+
+    /* Do not ask vanilla to draw unless its current SpriteBatch is active. */
+    if (!sprite_batch_is_active()) return;
 
     int mouse_x = 0;
     int mouse_y = 0;
@@ -196,123 +286,39 @@ static void draw_and_handle_settings(void) {
     if (g_main_screen_width) patchlib_field_get_value(g_main_screen_width, PATCH_NULL, &screen_width);
     if (g_main_screen_height) patchlib_field_get_value(g_main_screen_height, PATCH_NULL, &screen_height);
 
-    float ui_scale = get_ui_scale();
-    int ui_w = (int)((float)screen_width / ui_scale);
-    int ui_h = (int)((float)screen_height / ui_scale);
-    if (ui_w < 640) ui_w = 640;
-    if (ui_h < 360) ui_h = 360;
-
-    /* Draw in UI coordinates; convert rectangle back to physical mouse pixels. */
-    const int panel_w = 520;
-    const int row_h = 34;
-    int x = ui_w - panel_w - 24;
-    if (x < 250) x = 250;
-    int y0 = 62;
+    if (screen_width < 640) screen_width = 640;
+    if (screen_height < 360) screen_height = 360;
 
     bool click = mouse_left && !g_prev_mouse_left;
 
-    int hit_x = (int)((float)x * ui_scale);
-    int hit_y0 = (int)((float)y0 * ui_scale);
-    int hit_w = (int)((float)panel_w * ui_scale);
-    int hit_h = (int)((float)row_h * ui_scale);
+    if (!g_panel_open) {
+        int x = screen_width - ENTRY_WIDTH - 30;
+        if (x < 20) x = 20;
+        int y = 72;
 
-    rs_color_t white = make_color(245, 245, 245, 255);
-    rs_color_t green = make_color(105, 255, 135, 255);
-    rs_color_t red = make_color(255, 120, 120, 255);
-    rs_color_t yellow = make_color(255, 230, 90, 255);
-    rs_color_t cyan = make_color(90, 235, 255, 255);
-    rs_color_t gray = make_color(205, 205, 205, 255);
+        vanilla_mouse_text(g_entry_text, x, y, screen_width, screen_height);
 
-    bool entry_hover = point_in_rect(mouse_x, mouse_y, hit_x, hit_y0, hit_w, hit_h);
-    draw_text(
-        sb,
-        g_panel_open ? g_entry_close : g_entry_open,
-        (float)x,
-        (float)y0,
-        entry_hover ? yellow : cyan,
-        0.86f
-    );
-
-    if (click && entry_hover) {
-        g_panel_open = !g_panel_open;
-        click = false;
+        if (click && point_in_rect(mouse_x, mouse_y, x, y,
+                                   ENTRY_WIDTH, ENTRY_HEIGHT)) {
+            g_panel_open = true;
+            rebuild_panel_text();
+        }
     }
+    else {
+        int x = screen_width - PANEL_WIDTH - 30;
+        if (x < 20) x = 20;
+        int y = 70;
 
-    if (g_panel_open) {
-        int y = y0 + row_h + 8;
-        draw_text(sb, g_title, (float)x, (float)y, yellow, 0.78f);
-        y += row_h;
-        draw_text(sb, g_tip, (float)x, (float)y, gray, 0.62f);
-        y += row_h + 4;
-
-        for (int i = 0; i < RS_FEATURE_COUNT; ++i) {
-            bool enabled = resource_saver_feature_raw_enabled((rs_feature_t)i);
-
-            int hy = (int)((float)y * ui_scale);
-            bool hover = point_in_rect(mouse_x, mouse_y, hit_x, hy, hit_w, hit_h);
-
-            rs_color_t color = hover ? yellow : (enabled ? green : red);
-            draw_text(
-                sb,
-                enabled ? g_on_labels[i] : g_off_labels[i],
-                (float)x,
-                (float)y,
-                color,
-                0.70f
-            );
-
-            if (click && hover) {
-                resource_saver_config_toggle((rs_feature_t)i);
-                click = false;
-            }
-            y += row_h;
-        }
-
-        y += 4;
-        int hy_restore = (int)((float)y * ui_scale);
-        bool restore_hover = point_in_rect(mouse_x, mouse_y, hit_x, hy_restore, hit_w, hit_h);
-        draw_text(sb, g_restore, (float)x, (float)y,
-                  restore_hover ? yellow : white, 0.72f);
-        if (click && restore_hover) {
-            resource_saver_config_restore_defaults();
-            click = false;
-        }
-
-        y += row_h;
-        int hy_close = (int)((float)y * ui_scale);
-        bool close_hover = point_in_rect(mouse_x, mouse_y, hit_x, hy_close, hit_w, hit_h);
-        draw_text(sb, g_close, (float)x, (float)y,
-                  close_hover ? yellow : white, 0.72f);
-        if (click && close_hover) {
-            g_panel_open = false;
-            click = false;
-        }
+        if (!g_panel_text) rebuild_panel_text();
+        vanilla_mouse_text(g_panel_text, x, y, screen_width, screen_height);
+        handle_panel_click(mouse_x, mouse_y, x, y, click);
     }
 
     g_prev_mouse_left = mouse_left;
 }
 
-/*
- * IMPORTANT: in the verified Resource Saver v1.1.0 codebase Prefix hooks return
- * false to continue the vanilla method. Keep the same behavior here.
- */
-static bool inventory_prefix(
-    patch_handle_t instance,
-    void** args,
-    const patch_method_signature_t* sig,
-    void* result
-) {
-    (void)instance;
-    (void)args;
-    (void)sig;
-    (void)result;
-
-    g_drawn_this_inventory_call = false;
-    draw_and_handle_settings();
-    return false;
-}
-
-static void inventory_postfix(
+/* Postfix only: never interfere with the vanilla inventory/UI method. */
+static void ui_postfix(
     patch_handle_t instance,
     void** args,
     void* result,
@@ -322,92 +328,98 @@ static void inventory_postfix(
     (void)args;
     (void)result;
     (void)sig;
-
-    draw_and_handle_settings();
-
-    /* If no safe drawing stage was available, still update the click edge. */
-    if (!g_drawn_this_inventory_call && g_main_mouse_left) {
-        bool mouse_left = false;
-        patchlib_field_get_value(g_main_mouse_left, PATCH_NULL, &mouse_left);
-        g_prev_mouse_left = mouse_left;
-    }
+    draw_and_handle_ui();
 }
 
 void resource_saver_settings_ui_init(const char* private_dir) {
     (void)private_dir;
 
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
-    patch_handle_t utils_type = patchlib_type_get_type("Terraria", "Utils");
     patch_handle_t sprite_batch_type = patchlib_type_get_type(
         "Microsoft.Xna.Framework.Graphics", "SpriteBatch");
 
-    if (!main_type || !utils_type || !sprite_batch_type) goto done;
+    if (!main_type || !sprite_batch_type) goto done;
 
+    g_main_instance = patchlib_type_get_field(main_type, "instance");
     g_main_mouse_x = patchlib_type_get_field(main_type, "mouseX");
     g_main_mouse_y = patchlib_type_get_field(main_type, "mouseY");
     g_main_mouse_left = patchlib_type_get_field(main_type, "mouseLeft");
     g_main_screen_width = patchlib_type_get_field(main_type, "screenWidth");
     g_main_screen_height = patchlib_type_get_field(main_type, "screenHeight");
-    g_main_ui_scale = patchlib_type_get_field(main_type, "UIScale");
+    g_main_player_inventory = patchlib_type_get_field(main_type, "playerInventory");
     g_main_sprite_batch = patchlib_type_get_field(main_type, "spriteBatch");
-
-    /* MonoGame safety state. If this field is unavailable, the UI stays disabled. */
     g_sprite_batch_begin_called = patchlib_type_get_field(sprite_batch_type, "_beginCalled");
 
-    /* Verified exact method name from Android runtime probe. */
-    g_utils_draw_border_string = patchlib_type_get_method(utils_type, "DrawBorderString");
-    patch_handle_t inventory_method = patchlib_type_get_method(
-        main_type, "DrawInterface_27_Inventory");
+    /* Prefer exact 7-parameter vanilla MouseText overload. */
+    g_mouse_text_method = patchlib_type_get_method_by_param_count(main_type, "MouseText", 7);
+    if (!g_mouse_text_method) {
+        patch_handle_t candidate = patchlib_type_get_method(main_type, "MouseText");
+        if (candidate && patchlib_method_get_param_count(candidate) == 7) {
+            g_mouse_text_method = candidate;
+            candidate = PATCH_NULL;
+        }
+        if (candidate) patchlib_free(candidate);
+    }
 
-    init_texts();
+    if (g_mouse_text_method) {
+        g_mouse_text_is_instance = patchlib_method_is_instance(g_mouse_text_method);
+    }
 
-    if (inventory_method &&
+    /*
+     * DrawInterface_33_MouseText is the safest place for Main.MouseText because
+     * vanilla itself calls MouseText in this layer. If unavailable, fall back
+     * to the verified inventory layer. Both are hooked postfix-only.
+     */
+    patch_handle_t draw_method = patchlib_type_get_method(main_type, "DrawInterface_33_MouseText");
+    if (!draw_method) {
+        draw_method = patchlib_type_get_method(main_type, "DrawInterface_27_Inventory");
+    }
+
+    g_entry_text = patchlib_string_create("【资源节省设置】 点击打开");
+    rebuild_panel_text();
+
+    bool instance_ok = !g_mouse_text_is_instance || g_main_instance;
+
+    if (draw_method &&
+        g_mouse_text_method &&
+        instance_ok &&
         g_main_sprite_batch &&
         g_sprite_batch_begin_called &&
-        g_utils_draw_border_string) {
-        g_inventory_hook = patchlib_install_prepost_hook(
-            inventory_method,
-            inventory_prefix,
-            inventory_postfix
+        g_entry_text) {
+        g_ui_hook = patchlib_install_prepost_hook(
+            draw_method,
+            NULL,
+            ui_postfix
         );
     }
 
-    if (inventory_method) patchlib_free(inventory_method);
+    if (draw_method) patchlib_free(draw_method);
 
 done:
     if (main_type) patchlib_free(main_type);
-    if (utils_type) patchlib_free(utils_type);
     if (sprite_batch_type) patchlib_free(sprite_batch_type);
 }
 
 void resource_saver_settings_ui_cleanup(void) {
-    if (g_inventory_hook != PATCH_HOOK_INVALID_ID) {
-        patchlib_uninstall_hook(g_inventory_hook);
-        g_inventory_hook = PATCH_HOOK_INVALID_ID;
+    if (g_ui_hook != PATCH_HOOK_INVALID_ID) {
+        patchlib_uninstall_hook(g_ui_hook);
+        g_ui_hook = PATCH_HOOK_INVALID_ID;
     }
 
+    free_handle(&g_main_instance);
     free_handle(&g_main_mouse_x);
     free_handle(&g_main_mouse_y);
     free_handle(&g_main_mouse_left);
     free_handle(&g_main_screen_width);
     free_handle(&g_main_screen_height);
-    free_handle(&g_main_ui_scale);
+    free_handle(&g_main_player_inventory);
     free_handle(&g_main_sprite_batch);
     free_handle(&g_sprite_batch_begin_called);
-    free_handle(&g_utils_draw_border_string);
+    free_handle(&g_mouse_text_method);
 
-    free_handle(&g_entry_open);
-    free_handle(&g_entry_close);
-    free_handle(&g_title);
-    free_handle(&g_tip);
-    free_handle(&g_restore);
-    free_handle(&g_close);
-    for (int i = 0; i < RS_FEATURE_COUNT; ++i) {
-        free_handle(&g_on_labels[i]);
-        free_handle(&g_off_labels[i]);
-    }
+    free_handle(&g_entry_text);
+    free_handle(&g_panel_text);
 
     g_panel_open = false;
     g_prev_mouse_left = false;
-    g_drawn_this_inventory_call = false;
 }

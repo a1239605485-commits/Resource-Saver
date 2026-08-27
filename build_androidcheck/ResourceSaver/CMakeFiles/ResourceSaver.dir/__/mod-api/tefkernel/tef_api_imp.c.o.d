@@ -1,0 +1,61 @@
+ResourceSaver/CMakeFiles/ResourceSaver.dir/__/mod-api/tefkernel/tef_api_imp.c.o: \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tef_api_imp.c \
+ /usr/include/stdc-predef.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tef_api.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/field.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/type.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/../tef_api.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/../tefstd/vector.h \
+ /usr/lib/gcc/x86_64-linux-gnu/14/include/stdbool.h \
+ /usr/lib/gcc/x86_64-linux-gnu/14/include/stddef.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/../tefstd/../tef_api.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/method.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/property.h \
+ /usr/lib/gcc/x86_64-linux-gnu/14/include/stdint.h /usr/include/stdint.h \
+ /usr/include/x86_64-linux-gnu/bits/libc-header-start.h \
+ /usr/include/features.h /usr/include/features-time64.h \
+ /usr/include/x86_64-linux-gnu/bits/wordsize.h \
+ /usr/include/x86_64-linux-gnu/bits/timesize.h \
+ /usr/include/x86_64-linux-gnu/sys/cdefs.h \
+ /usr/include/x86_64-linux-gnu/bits/long-double.h \
+ /usr/include/x86_64-linux-gnu/gnu/stubs.h \
+ /usr/include/x86_64-linux-gnu/gnu/stubs-64.h \
+ /usr/include/x86_64-linux-gnu/bits/types.h \
+ /usr/include/x86_64-linux-gnu/bits/typesizes.h \
+ /usr/include/x86_64-linux-gnu/bits/time64.h \
+ /usr/include/x86_64-linux-gnu/bits/wchar.h \
+ /usr/include/x86_64-linux-gnu/bits/stdint-intn.h \
+ /usr/include/x86_64-linux-gnu/bits/stdint-uintn.h \
+ /usr/include/x86_64-linux-gnu/bits/stdint-least.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/type.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/struct/array.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/struct/../type.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/struct/dictionary.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/struct/string.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/patchlib/struct/list.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tefstd/vector.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tefstd/hashmap.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tefstd/../tef_api.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tefstd/skipmap.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/memdl/memdl.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/memdl/../tef_api.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/modloader/modloader_core.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/modloader/../tefstd/vector.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/modloader/../tefpackage/tefpkg.h \
+ /usr/include/stdio.h /usr/lib/gcc/x86_64-linux-gnu/14/include/stdarg.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__fpos_t.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__mbstate_t.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__fpos64_t.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__FILE.h \
+ /usr/include/x86_64-linux-gnu/bits/types/FILE.h \
+ /usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h \
+ /usr/include/x86_64-linux-gnu/bits/types/cookie_io_functions_t.h \
+ /usr/include/x86_64-linux-gnu/bits/stdio_lim.h \
+ /usr/include/x86_64-linux-gnu/bits/floatn.h \
+ /usr/include/x86_64-linux-gnu/bits/floatn-common.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/modloader/../tefpackage/../tef_api.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/module/module_core.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/module/../tefpackage/tefpkg.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tefpackage/tefpkg.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tefplugin/tpf_core.h \
+ /mnt/data/rs_v126_cn/mod-api/tefkernel/tefplugin/../tef_api.h

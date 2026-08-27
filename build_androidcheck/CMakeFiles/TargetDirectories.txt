@@ -1,0 +1,5 @@
+/mnt/data/rs_v126_cn/build_androidcheck/CMakeFiles/edit_cache.dir
+/mnt/data/rs_v126_cn/build_androidcheck/CMakeFiles/rebuild_cache.dir
+/mnt/data/rs_v126_cn/build_androidcheck/ResourceSaver/CMakeFiles/ResourceSaver.dir
+/mnt/data/rs_v126_cn/build_androidcheck/ResourceSaver/CMakeFiles/edit_cache.dir
+/mnt/data/rs_v126_cn/build_androidcheck/ResourceSaver/CMakeFiles/rebuild_cache.dir

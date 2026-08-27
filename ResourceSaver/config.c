@@ -54,7 +54,7 @@ void resource_saver_config_save(void) {
     }
 
     fprintf(fp,
-            "# Resource Saver v1.2.6\n"
+            "# Resource Saver v1.2.7\n"
             "# 1 = enabled, 0 = disabled\n"
             "master=%d\n"
             "regular_ammo=%d\n"

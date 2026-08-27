@@ -1,8 +1,13 @@
-# Resource Saver v1.2.6
+# Terraria Resource Saver v1.2.7
 
-基于已验证的 v1.1.0 功能核心。
+安全中文设置 UI 修正版。
 
-本版 UI 根据 Android Terraria 1.4.5.6.4 真机日志确认的 `Terraria.Main.DrawInterface_27_Inventory` 实现。
-不主动调用 SpriteBatch.Begin/End；仅当 `_beginCalled == true` 时绘制中文设置按钮和面板。
+- 核心功能继续使用已验证的 v1.1.0 逻辑。
+- 配置总开关 + 8 个独立开关继续保存到 `private_dir/config.ini`。
+- 不再调用 `Utils.DrawBorderString`、`SpriteBatch.DrawString` 或任何需要 `Vector2/Color` 结构体参数的反射绘图函数。
+- 中文设置界面改用 Terraria 原版 `Main.MouseText(...)` 绘制。
+- UI 仅安装 Postfix，不跳过任何原版 UI 方法。
+- 优先挂 `DrawInterface_33_MouseText`，找不到时回退到 `DrawInterface_27_Inventory`。
+- 只有原版 SpriteBatch 已经 Begin 时才显示设置 UI。
 
-打开背包后显示“资源节省设置”。
+打开背包后应看到 `【资源节省设置】 点击打开`。
