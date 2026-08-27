@@ -1,4 +1,4 @@
-# 精打细算 / Resource Saver v1.1.1
+# 精打细算 / Resource Saver v1.1.0
 
 作者：liuxin  
 目标：Terraria Android 1.4.5.6.4 / arm64 / TEFKernel
@@ -24,7 +24,7 @@
 HeldItem 分类如果在某一帧读取失败，不会中断整个 MOD：
 
 - 弹药回退到 v1.0.3 已验证的 20% 节省；
-- 魔力不再依赖 HeldItem：Player.Update 期间会临时降低物品栏内所有耗蓝物品的 Item.mana，结束后立即恢复；
+- 魔力仍保留基础 -15%；
 - 仅“特殊弹药10% / 召唤25% / 近战专属药水冷却”暂时跳过该帧。
 
 这样可以避免再次出现“一个 getter 失败导致所有功能都失效”。
@@ -41,8 +41,3 @@ HeldItem 分类如果在某一帧读取失败，不会中断整个 MOD：
 - 检测到的鱼饵消耗次数 / MOD 实际返还数量
 
 这些数值主要用于定位兼容性问题；ammo frames 是功能应用帧数，不伪装成“实际省下的弹药数量”。
-
-
-## v1.1.1 魔力修复
-
-1.4.5 将实际魔力支付流程拆分到了新的内部方法。v1.1.1 不再依赖 Player.manaCost 是否被这些路径读取，而是在 Player.Update 前临时降低 inventory 中所有 mana>0 物品的 Item.mana，Update 后恢复原值。这样不会永久改物品，也避免每帧重复乘算。
